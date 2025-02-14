@@ -1,0 +1,21 @@
+[project]
+name = "img2pc"
+version = "0.1.0"
+description = "Simple image to point cloud model with GATr"
+authors = [
+    {name = "guest400123064", email = "wangy49@alumni.upenn.edu"},
+    {name = "M4D-SC1ENTIST", email = "xiatao.sun@yale.edu"}
+]
+license = {file = "LICENSE"}
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "ezgatr @ file:///home/catcat/projects/ezgatr"
+]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.dependencies]
+ezgatr = {develop = true}
