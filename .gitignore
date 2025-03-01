@@ -172,3 +172,6 @@ cython_debug/
 
 # VSCode settings
 .vscode/
+
+# Large dataset
+data/
