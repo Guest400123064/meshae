@@ -19,7 +19,7 @@ class ModelConfig:
 
     Parameters
     ----------
-    adpt_num_layers: int
+    adpt_num_blocks: int
         Number of vision encoder adaptor (FFN) blocks.
     adpt_dim_hidden: int
         Adaptor input and output size. Tying the input and output size
@@ -27,7 +27,7 @@ class ModelConfig:
         be a multiple of 16 to be compatible with the GATr modules.
     adpt_dim_intermediate: int
         Size of the intermediate representations within FFN blocks.
-    gnrt_num_layers: int
+    gnrt_num_blocks: int
         Number of point cloud generator blocks.
     gnrt_dim_hidden: int
         Number of channels for the hidden representations passed between
@@ -44,12 +44,12 @@ class ModelConfig:
 
     """
 
-    adpt_num_layers: int = 2
+    adpt_num_blocks: int = 2
     adpt_dim_hidden: int = 768
     adpt_dim_intermediate: int = 1024
 
     gnrt_num_points: int = 1024
-    gnrt_num_layers: int = 2
+    gnrt_num_blocks: int = 2
     gnrt_dim_hidden: int = 48
     gnrt_dim_intermediate: int = 48
 
@@ -132,21 +132,21 @@ class AdaptorModel(nn.Module):
     """
 
     config: ModelConfig
-    layers: nn.ModuleList
+    blocks: nn.ModuleList
 
     def __init__(self, config: ModelConfig):
         super().__init__()
 
         self.config = config
 
-        self.layers = nn.ModuleList(
-            AdaptorBlock(config) for _ in range(config.adpt_num_layers)
+        self.blocks = nn.ModuleList(
+            AdaptorBlock(config) for _ in range(config.adpt_num_blocks)
         )
 
     def forward(self, hidden: torch.Tensor) -> torch.Tensor:
         r"""Adaptor forward pass.
 
-        Simply pass through all adaptor layers and rearrange to channels of
+        Simply pass through all adaptor blocks and rearrange to channels of
         multi-vectors in the end.
 
         Parameters
@@ -160,7 +160,7 @@ class AdaptorModel(nn.Module):
         torch.Tensor
             Transformed vision embedding represented as multi-vectors.
         """
-        hidden = reduce(lambda x, layer: layer(x), self.layers, hidden)
+        hidden = reduce(lambda x, layer: layer(x), self.blocks, hidden)
         return rearrange(hidden, "... (c k) -> ... c k", k=16)
 
 
