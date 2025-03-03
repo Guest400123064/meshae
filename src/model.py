@@ -304,5 +304,5 @@ class GeneratorModel(nn.Module):
     pass
 
 
-class PCGenModel(nn.Module):
+class Img2PCModel(nn.Module):
     pass
