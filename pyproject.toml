@@ -12,12 +12,20 @@ requires-python = ">=3.10"
 dependencies = [
     "ezgatr @ file:///home/catcat/projects/ezgatr",
     "transformers (>=4.48.3,<5.0.0)",
-    "pillow (>=11.1.0,<12.0.0)"
+    "pillow (>=11.1.0,<12.0.0)",
+    "torch (==2.0.0)",
+    "iopath (>=0.1.10,<0.2.0)",
+    "fvcore (>=0.1.5.post20221221,<0.2.0)",
+    "numpy (<2.0.0)",
+    "pytorch3d @ https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu117_pyt200/pytorch3d-0.7.3-cp310-cp310-linux_x86_64.whl",
 ]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+package-mode = false
 
 [tool.poetry.dependencies]
 ezgatr = {develop = true}

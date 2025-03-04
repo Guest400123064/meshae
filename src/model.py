@@ -1,5 +1,7 @@
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
 from functools import reduce
+from typing import Any, Literal
 
 import torch
 import torch.nn as nn
@@ -36,6 +38,16 @@ class ModelConfig:
         Number of channels passed to the geometric bilinear blocks. The number
         must be divisible by 2 because the input multi-vectors will be projected
         to left and right components.
+    gnrt_num_attn_heads: int
+        Number of attention heads in the self-attention and cross-attention blocks.
+    gnrt_attn_kinds: dict[Literal["ipa", "daa"], dict[str, Any] | None]
+        Kinds of similarity measures to consider in the attention calculation
+        along with additional configuration/parameters sent to the corresponding
+        query-key generating function. One should supply a dictionary mapping
+        from the kind to parameters in addition to query and key tensors. Use
+        ``None`` to denote no additional parameters supplied. Available options:
+        - "ipa": Inner product attention
+        - "daa": Distance-aware attention
     gnrt_num_points: int
         Number of point in the point could.
     gnrt_num_prompt_tokens: int
@@ -52,6 +64,10 @@ class ModelConfig:
     gnrt_num_blocks: int = 2
     gnrt_dim_hidden: int = 48
     gnrt_dim_intermediate: int = 48
+    gnrt_num_attn_heads: int = 8
+    gnrt_attn_kinds: dict[Literal["ipa", "daa"], dict[str, Any] | None] = field(
+        default_factory=lambda: {"ipa": None, "daa": None}
+    )
 
 
 class AdaptorBlock(nn.Module):
@@ -64,18 +80,22 @@ class AdaptorBlock(nn.Module):
     config: ModelConfig
         Configuration for the entire generator model. See ``ModelConfig``
         for more details.
+    idx: int
+        Layer index.
     """
 
     config: ModelConfig
+    idx: int
     proj_gate: nn.Linear
     proj_next: nn.Linear
     activation: nn.GELU
     layer_norm: nn.RMSNorm
 
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: ModelConfig, idx: int):
         super().__init__()
 
         self.config = config
+        self.idx = idx
 
         self.proj_gate = nn.Linear(
             config.adpt_dim_hidden,
@@ -140,8 +160,26 @@ class AdaptorModel(nn.Module):
         self.config = config
 
         self.blocks = nn.ModuleList(
-            AdaptorBlock(config) for _ in range(config.adpt_num_blocks)
+            AdaptorBlock(config, i) for i in range(config.adpt_num_blocks)
         )
+        self.apply(self._init_params)
+
+    def _init_params(self, module: nn.Module):
+        r"""Parameter initialization for all adaptor modules.
+
+        Slight adjustment to Kaiming init by down-scaling the weights
+        by the number of encoder layers, following the GPT-2 paper.
+
+        Parameters
+        ----------
+        module : nn.Module
+            Module to initialize.
+        """
+        if isinstance(module, nn.Linear):
+            nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
+            module.weight.data /= math.sqrt(self.config.adpt_num_blocks)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
 
     def forward(self, hidden: torch.Tensor) -> torch.Tensor:
         r"""Adaptor forward pass.
@@ -160,7 +198,7 @@ class AdaptorModel(nn.Module):
         torch.Tensor
             Transformed vision embedding represented as multi-vectors.
         """
-        hidden = reduce(lambda x, layer: layer(x), self.blocks, hidden)
+        hidden = reduce(lambda x, block: block(x), self.blocks, hidden)
         return rearrange(hidden, "... (c k) -> ... c k", k=16)
 
 
@@ -188,7 +226,7 @@ class GeneratorBilinear(nn.Module):
     proj_bili: EquiLinear
     proj_next: EquiLinear
 
-    def __init__(self, config: ModelConfig) -> None:
+    def __init__(self, config: ModelConfig):
         super().__init__()
 
         self.config = config
@@ -289,20 +327,202 @@ class GeneratorMLP(nn.Module):
 
 
 class GeneratorSelfAttention(nn.Module):
-    pass
+    r"""Geometric self-attention block without scaler channels.
+
+    The GATr attention calculation is slightly different from the original
+    transformers implementation in that each head has the sample number-of-
+    channels as the input tensor, instead of dividing into smaller chunks.
+    In this case, the final output linear transformation maps from
+    ``gnrt_dim_hidden * gnrt_num_attn_heads`` to ``gnrt_dim_hidden``.
+
+    One additional note here is that the ``attn_mix`` parameter is a dictionary
+    of learnable weighting parameter **LOGITS** for each attention kind.
+    They will be exponentiated before being used in the attention calculation.
+
+    Parameters
+    ----------
+    config : ModelConfig
+        Configuration object for the model. See ``ModelConfig`` for more details.
+    """
+
+    config: ModelConfig
+    attn_mix: dict[str, torch.Tensor]
+    proj_attn: EquiLinear
+    proj_next: EquiLinear
+    layer_norm: EquiRMSNorm
+
+    def __init__(self, config: ModelConfig):
+        super().__init__()
+
+        self.config = config
+
+        self.layer_norm = EquiRMSNorm(config.gnrt_dim_hidden)
+
+        # The two dummy dimensions are for the sequence length and blade
+        # dimensions, respectively.
+        attn_mix_shape = (config.gnrt_num_attn_heads, 1, config.gnrt_dim_hidden, 1)
+        self.attn_mix = {}
+        for kind in config.gnrt_attn_kinds.keys():
+            param = nn.Parameter(torch.zeros(attn_mix_shape, dtype=torch.float32))
+            self.attn_mix[kind] = param
+            self.register_parameter(f"attn_mix_{kind}", param)
+
+        self.proj_attn = EquiLinear(
+            config.gnrt_dim_hidden,
+            config.gnrt_dim_hidden * config.gnrt_num_attn_heads * 3,
+        )
+        self.proj_next = EquiLinear(
+            config.gnrt_dim_hidden * config.gnrt_num_attn_heads,
+            config.gnrt_dim_hidden,
+        )
+
+    def forward(
+        self, hidden: torch.Tensor, attn_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        r"""Forward pass of the geometric self-attention block.
+
+        Parameters
+        ----------
+        hidden: torch.Tensor
+            Batch of input hidden multi-vector representation tensor.
+        attn_mask: torch.Tensor, optional
+            Attention mask tensor for the attention operation. Usually
+            used if any specific attention constraints are needed within
+            a single sequence, such as padding mask or for discriminating
+            different subsequences.
+        """
+        hidden_res_conn = hidden
+        hidden = self.layer_norm(hidden)
+
+        q, k, v = rearrange(
+            self.proj_attn(hidden),
+            "b t (qkv h c) k -> qkv b h t c k",
+            qkv=3,
+            h=self.config.gnrt_num_attn_heads,
+            c=self.config.gnrt_dim_hidden,
+        )
+        hidden, _ = equi_geometric_attention(
+            q,
+            k,
+            v,
+            kinds=self.config.attn_kinds,
+            weight=[w.exp() for w in self.attn_mix.values()],
+            attn_mask=attn_mask,
+            is_causal=False,
+        )
+        hidden = rearrange(
+            hidden,
+            "b h t c k -> b t (h c) k",
+            h=self.config.gnrt_num_attn_heads,
+        )
+        hidden = self.proj_next(hidden)
+
+        return hidden + hidden_res_conn
 
 
 class GeneratorCrossAttention(nn.Module):
-    pass
+    r"""
+    """
+
+    attn_mix: dict[str, torch.Tensor]
+    proj_attn_gnrt: EquiLinear
+    proj_attn_adpt: EquiLinear
+    proj_next: EquiLinear
+    layer_norm: EquiRMSNorm
 
 
 class GeneratorBlock(nn.Module):
-    pass
+    r""""""
+
+    config: ModelConfig
+    idx: int
+
+    def __init__(self, config: ModelConfig, idx: int):
+        super().__init__()
+
+        self.config = config
+        self.idx = idx
 
 
 class GeneratorModel(nn.Module):
-    pass
+    r"""Glue generator blocks together.
+
+    Parameters
+    ----------
+    config: ModelConfig
+        Configuration object for the model. See ``ModelConfig`` for more details.
+    """
+
+    config: ModelConfig
+    head: EquiLinear
+    embedding: EquiLinear
+    blocks: nn.ModuleList
+
+    def __init__(self, config: ModelConfig):
+        super().__init__()
+
+        self.config = config
+
+        self.head = EquiLinear(config.gnrt_dim_hidden, 1)
+        self.embedding = EquiLinear(1, config.gnrt_dim_hidden)
+        self.blocks = nn.ModuleList(
+            GeneratorBlock(config, i) for i in range(config.gnrt_num_blocks)
+        )
+        self.apply(self._init_params)
+
+    def _init_params(self, module: nn.Module):
+        r"""Parameter initialization for all generator modules.
+
+        Slight adjustment to Kaiming init by down-scaling the weights
+        by the number of encoder layers, following the GPT-2 paper.
+
+        Parameters
+        ----------
+        module: nn.Module
+            Module to initialize.
+        """
+        if isinstance(module, EquiLinear):
+            nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
+            module.weight.data /= math.sqrt(self.config.gnrt_num_blocks)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+    def forward(
+        self,
+        noise: torch.Tensor,
+        vision_embedding: torch.Tensor,
+        reference: torch.Tensor | None = None,
+        attn_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        r"""Forward pass of the point cloud generator.
+
+        Parameters
+        ----------
+        noise: torch.Tensor
+            Randomly generated point cloud embedded as PGA multi-vectors.
+        vision_embedding: torch.Tensor
+            Vision embedding transformed by the adaptor.
+        reference: torch.Tensor
+            The reference multi-vector used in geometric bilinear operation.
+        attn_mask: torch.Tensor
+            The attention mask used in the geometric self-attention layer.
+
+        Returns
+        -------
+        torch.Tensor
+            Generated point cloud embedded as PGA multi-vectors.
+        """
+        pc = reduce(
+            lambda x, block: block(x, vision_embedding, reference, attn_mask),
+            self.blocks,
+            self.embedding(noise),
+        )
+        return self.head(pc)
 
 
 class Img2PCModel(nn.Module):
+    r"""Combine vision adaptor and point cloud generator together.
+
+    
+    """
     pass
