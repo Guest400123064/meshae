@@ -40,6 +40,9 @@ class ModelConfig:
         to left and right components.
     gnrt_num_attn_heads: int
         Number of attention heads in the self-attention and cross-attention blocks.
+    gnrt_lin_bias: bool
+        Whether ``equi_linear`` projection contains bias term. As a reminder, bias
+        terms are only added to the scalar terms of multi-vectors.
     gnrt_attn_kinds: dict[Literal["ipa", "daa"], dict[str, Any] | None]
         Kinds of similarity measures to consider in the attention calculation
         along with additional configuration/parameters sent to the corresponding
@@ -48,12 +51,6 @@ class ModelConfig:
         ``None`` to denote no additional parameters supplied. Available options:
         - "ipa": Inner product attention
         - "daa": Distance-aware attention
-    gnrt_num_points: int
-        Number of point in the point could.
-    gnrt_num_prompt_tokens: int
-        Number of vision embedding tokens. For instance, the ViT-16x16
-        model can have at most 196 + 1 tokens to be used as the prompt.
-
     """
 
     adpt_num_blocks: int = 2
@@ -65,6 +62,7 @@ class ModelConfig:
     gnrt_dim_hidden: int = 48
     gnrt_dim_intermediate: int = 48
     gnrt_num_attn_heads: int = 8
+    gnrt_lin_bias: bool = True
     gnrt_attn_kinds: dict[Literal["ipa", "daa"], dict[str, Any] | None] = field(
         default_factory=lambda: {"ipa": None, "daa": None}
     )
@@ -237,10 +235,12 @@ class GeneratorBilinear(nn.Module):
         self.proj_bili = EquiLinear(
             config.gnrt_dim_hidden,
             config.gnrt_dim_intermediate * 2,
+            bias=config.gnrt_lin_bias,
         )
         self.proj_next = EquiLinear(
             config.gnrt_dim_intermediate,
             config.gnrt_dim_hidden,
+            bias=config.gnrt_lin_bias,
         )
 
     def forward(
@@ -297,6 +297,7 @@ class GeneratorMLP(nn.Module):
         self.proj_next = EquiLinear(
             config.gnrt_dim_hidden,
             config.gnrt_dim_hidden,
+            bias=config.gnrt_lin_bias,
         )
         self.layer_norm = EquiRMSNorm(config.gnrt_dim_hidden)
 
@@ -310,7 +311,9 @@ class GeneratorMLP(nn.Module):
         hidden: torch.Tensor
             Batch of input hidden multi-vector representation tensor.
         reference : torch.Tensor, optional
-            Reference tensor for the equivariant join operation.
+            Reference tensor for the equivariant join operation. By default,
+            the average value of all tokens and all channels will be used as
+            the reference multi-vector.
 
         Returns
         -------
@@ -319,6 +322,11 @@ class GeneratorMLP(nn.Module):
             same number of hidden channels.
         """
         hidden_res_conn = hidden
+        reference = reference or torch.mean(
+            hidden,
+            dim=tuple(range(1, len(hidden.shape) - 1)),
+            keepdim=True,
+        )
 
         hidden = self.equi_bili(self.layer_norm(hidden), reference)
         hidden = self.proj_next(scaler_gated_gelu(hidden, "none"))
@@ -335,10 +343,6 @@ class GeneratorSelfAttention(nn.Module):
     In this case, the final output linear transformation maps from
     ``gnrt_dim_hidden * gnrt_num_attn_heads`` to ``gnrt_dim_hidden``.
 
-    One additional note here is that the ``attn_mix`` parameter is a dictionary
-    of learnable weighting parameter **LOGITS** for each attention kind.
-    They will be exponentiated before being used in the attention calculation.
-
     Parameters
     ----------
     config : ModelConfig
@@ -346,7 +350,6 @@ class GeneratorSelfAttention(nn.Module):
     """
 
     config: ModelConfig
-    attn_mix: dict[str, torch.Tensor]
     proj_attn: EquiLinear
     proj_next: EquiLinear
     layer_norm: EquiRMSNorm
@@ -356,40 +359,30 @@ class GeneratorSelfAttention(nn.Module):
 
         self.config = config
 
-        self.layer_norm = EquiRMSNorm(config.gnrt_dim_hidden)
-
-        # The two dummy dimensions are for the sequence length and blade
-        # dimensions, respectively.
-        attn_mix_shape = (config.gnrt_num_attn_heads, 1, config.gnrt_dim_hidden, 1)
-        self.attn_mix = {}
-        for kind in config.gnrt_attn_kinds.keys():
-            param = nn.Parameter(torch.zeros(attn_mix_shape, dtype=torch.float32))
-            self.attn_mix[kind] = param
-            self.register_parameter(f"attn_mix_{kind}", param)
-
         self.proj_attn = EquiLinear(
             config.gnrt_dim_hidden,
             config.gnrt_dim_hidden * config.gnrt_num_attn_heads * 3,
+            bias=config.gnrt_lin_bias,
         )
         self.proj_next = EquiLinear(
             config.gnrt_dim_hidden * config.gnrt_num_attn_heads,
             config.gnrt_dim_hidden,
+            bias=config.gnrt_lin_bias,
         )
+        self.layer_norm = EquiRMSNorm(config.gnrt_dim_hidden)
 
-    def forward(
-        self, hidden: torch.Tensor, attn_mask: torch.Tensor | None = None
-    ) -> torch.Tensor:
+    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
         r"""Forward pass of the geometric self-attention block.
 
         Parameters
         ----------
         hidden: torch.Tensor
             Batch of input hidden multi-vector representation tensor.
-        attn_mask: torch.Tensor, optional
-            Attention mask tensor for the attention operation. Usually
-            used if any specific attention constraints are needed within
-            a single sequence, such as padding mask or for discriminating
-            different subsequences.
+
+        Returns
+        -------
+        torch.Tensor:
+            Hidden states after time-mixing.
         """
         hidden_res_conn = hidden
         hidden = self.layer_norm(hidden)
@@ -406,8 +399,6 @@ class GeneratorSelfAttention(nn.Module):
             k,
             v,
             kinds=self.config.attn_kinds,
-            weight=[w.exp() for w in self.attn_mix.values()],
-            attn_mask=attn_mask,
             is_causal=False,
         )
         hidden = rearrange(
@@ -424,11 +415,41 @@ class GeneratorCrossAttention(nn.Module):
     r"""
     """
 
-    attn_mix: dict[str, torch.Tensor]
+    config: ModelConfig
     proj_attn_gnrt: EquiLinear
     proj_attn_adpt: EquiLinear
     proj_next: EquiLinear
     layer_norm: EquiRMSNorm
+
+    def __init__(self, config: ModelConfig):
+        super().__init__()
+
+        self.config = config
+
+        self.proj_attn_adpt = EquiLinear(
+            config.gnrt_dim_hidden,
+            config.gnrt_dim_hidden * config.gnrt_num_attn_heads * 2,
+            bias=config.gnrt_lin_bias,
+        )
+        self.proj_attn_gnrt = EquiLinear(
+            config.gnrt_dim_hidden,
+            config.gnrt_dim_hidden * config.gnrt_num_attn_heads,
+            bias=config.gnrt_lin_bias,
+        )
+        self.proj_next = EquiLinear(
+            config.gnrt_dim_hidden * config.gnrt_num_attn_heads,
+            config.gnrt_dim_hidden,
+            bias=config.gnrt_lin_bias,
+        )
+        self.layer_norm = EquiRMSNorm(config.gnrt_dim_hidden)
+
+    def forward(
+        self,
+        hidden: torch.Tensor,
+        vision_embedding: torch.Tensor,
+    ) -> torch.Tensor:
+        r""""""
+
 
 
 class GeneratorBlock(nn.Module):
@@ -442,6 +463,9 @@ class GeneratorBlock(nn.Module):
 
         self.config = config
         self.idx = idx
+
+    def forward(self,):
+        pass
 
 
 class GeneratorModel(nn.Module):
@@ -463,8 +487,16 @@ class GeneratorModel(nn.Module):
 
         self.config = config
 
-        self.head = EquiLinear(config.gnrt_dim_hidden, 1)
-        self.embedding = EquiLinear(1, config.gnrt_dim_hidden)
+        self.head = EquiLinear(
+            config.gnrt_dim_hidden,
+            1,
+            bias=config.gnrt_lin_bias,
+        )
+        self.embedding = EquiLinear(
+            1,
+            config.gnrt_dim_hidden,
+            bias=config.gnrt_lin_bias,
+        )
         self.blocks = nn.ModuleList(
             GeneratorBlock(config, i) for i in range(config.gnrt_num_blocks)
         )
@@ -502,22 +534,20 @@ class GeneratorModel(nn.Module):
             Randomly generated point cloud embedded as PGA multi-vectors.
         vision_embedding: torch.Tensor
             Vision embedding transformed by the adaptor.
-        reference: torch.Tensor
+        reference: torch.Tensor, optional
             The reference multi-vector used in geometric bilinear operation.
-        attn_mask: torch.Tensor
-            The attention mask used in the geometric self-attention layer.
 
         Returns
         -------
         torch.Tensor
             Generated point cloud embedded as PGA multi-vectors.
         """
-        pc = reduce(
-            lambda x, block: block(x, vision_embedding, reference, attn_mask),
+        point_cloud = reduce(
+            lambda x, block: block(x, vision_embedding, reference),
             self.blocks,
             self.embedding(noise),
         )
-        return self.head(pc)
+        return self.head(point_cloud)
 
 
 class Img2PCModel(nn.Module):
