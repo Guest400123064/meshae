@@ -448,8 +448,55 @@ class GeneratorCrossAttention(nn.Module):
         hidden: torch.Tensor,
         vision_embedding: torch.Tensor,
     ) -> torch.Tensor:
-        r""""""
+        r"""
 
+        Parameters
+        ----------
+        hidden: torch.Tensor
+            Generator hidden states.
+        vision_embedding: torch.Tensor
+            Embeddings from pre-trained vision encoder.
+
+        Returns
+        -------
+        torch.Tensor
+            TBD
+        """
+        hidden_res_conn = hidden
+        hidden = self.layer_norm(hidden)
+
+        # Not sure if we should do layer norm to vision embeddings
+        vision_embedding = self.layer_norm(hidden)
+
+        # Regular QKV stuff with KV generated from vision embeddings
+        q = rearrange(
+            self.proj_attn_gnrt(hidden),
+            "b t (h c) k -> b h t c k",
+            h=self.config.gnrt_num_attn_heads,
+            c=self.config.gnrt_dim_hidden,
+        )
+        k, v = rearrange(
+            self.proj_attn_adpt(vision_embedding),
+            "b t (kv h c) k -> kv b h t c k",
+            kv=2,
+            h=self.config.gnrt_num_attn_heads,
+            c=self.config.gnrt_dim_hidden,
+        )
+        hidden, _ = equi_geometric_attention(
+            q,
+            k,
+            v,
+            kinds=self.config.attn_kinds,
+            is_causal=False,
+        )
+        hidden = rearrange(
+            hidden,
+            "b h t c k -> b t (h c) k",
+            h=self.config.gnrt_num_attn_heads,
+        )
+        hidden = self.proj_next(hidden)
+
+        return hidden + hidden_res_conn
 
 
 class GeneratorBlock(nn.Module):
@@ -464,8 +511,18 @@ class GeneratorBlock(nn.Module):
         self.config = config
         self.idx = idx
 
-    def forward(self,):
-        pass
+        self.mlp = GeneratorMLP(config)
+        self.attn_self = GeneratorSelfAttention(config)
+        self.attn_cross = GeneratorCrossAttention(config)
+
+    def forward(
+        self,
+        hidden: torch.Tensor,
+        vision_embedding: torch.Tensor,
+        reference: torch.Tensor | None,
+    ) -> torch.Tensor:
+        hidden = self.attn_cross(self.attn_self(hidden), vision_embedding)
+        return self.mlp(hidden, reference)
 
 
 class GeneratorModel(nn.Module):
@@ -524,7 +581,6 @@ class GeneratorModel(nn.Module):
         noise: torch.Tensor,
         vision_embedding: torch.Tensor,
         reference: torch.Tensor | None = None,
-        attn_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         r"""Forward pass of the point cloud generator.
 
