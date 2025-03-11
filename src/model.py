@@ -109,19 +109,6 @@ class AdaptorBlock(nn.Module):
         self.layer_norm = nn.RMSNorm(config.adpt_dim_hidden)
 
     def forward(self, hidden: torch.Tensor) -> torch.Tensor:
-        r"""Vision embedding transformation.
-
-        Parameters
-        ----------
-        hidden: torch.Tensor
-            Output from the vision encoder or from the previous adaptor
-            block, having the shape ``(B, L, E)``.
-
-        Returns
-        -------
-        torch.Tensor
-            Batch of transformed (sequence of) vision embeddings.
-        """
         hidden_res_conn = hidden
         hidden = self.layer_norm(hidden)
 
@@ -372,18 +359,6 @@ class GeneratorSelfAttention(nn.Module):
         self.layer_norm = EquiRMSNorm(config.gnrt_dim_hidden)
 
     def forward(self, hidden: torch.Tensor) -> torch.Tensor:
-        r"""Forward pass of the geometric self-attention block.
-
-        Parameters
-        ----------
-        hidden: torch.Tensor
-            Batch of input hidden multi-vector representation tensor.
-
-        Returns
-        -------
-        torch.Tensor:
-            Hidden states after time-mixing.
-        """
         hidden_res_conn = hidden
         hidden = self.layer_norm(hidden)
 
@@ -412,7 +387,12 @@ class GeneratorSelfAttention(nn.Module):
 
 
 class GeneratorCrossAttention(nn.Module):
-    r"""
+    r"""Cross attention layer for vision information intake.
+
+    Parameters
+    ----------
+    config: ModelConfig
+        Configuration object for the model. See ``ModelConfig`` for more details.
     """
 
     config: ModelConfig
@@ -448,20 +428,6 @@ class GeneratorCrossAttention(nn.Module):
         hidden: torch.Tensor,
         vision_embedding: torch.Tensor,
     ) -> torch.Tensor:
-        r"""
-
-        Parameters
-        ----------
-        hidden: torch.Tensor
-            Generator hidden states.
-        vision_embedding: torch.Tensor
-            Embeddings from pre-trained vision encoder.
-
-        Returns
-        -------
-        torch.Tensor
-            TBD
-        """
         hidden_res_conn = hidden
         hidden = self.layer_norm(hidden)
 
@@ -500,10 +466,19 @@ class GeneratorCrossAttention(nn.Module):
 
 
 class GeneratorBlock(nn.Module):
-    r""""""
+    r"""Combining MLP, self-attention, and cross-attention together.
+
+    Parameters
+    ----------
+    config: ModelConfig
+        Configuration object for the model. See ``ModelConfig`` for more details.
+    """
 
     config: ModelConfig
     idx: int
+    mlp: GeneratorMLP
+    attn_self: GeneratorSelfAttention
+    attn_cross: GeneratorCrossAttention
 
     def __init__(self, config: ModelConfig, idx: int):
         super().__init__()
@@ -582,22 +557,6 @@ class GeneratorModel(nn.Module):
         vision_embedding: torch.Tensor,
         reference: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        r"""Forward pass of the point cloud generator.
-
-        Parameters
-        ----------
-        noise: torch.Tensor
-            Randomly generated point cloud embedded as PGA multi-vectors.
-        vision_embedding: torch.Tensor
-            Vision embedding transformed by the adaptor.
-        reference: torch.Tensor, optional
-            The reference multi-vector used in geometric bilinear operation.
-
-        Returns
-        -------
-        torch.Tensor
-            Generated point cloud embedded as PGA multi-vectors.
-        """
         point_cloud = reduce(
             lambda x, block: block(x, vision_embedding, reference),
             self.blocks,
@@ -609,6 +568,27 @@ class GeneratorModel(nn.Module):
 class Img2PCModel(nn.Module):
     r"""Combine vision adaptor and point cloud generator together.
 
-    
+    Parameters
+    ----------
+    config: ModelConfig
+        Configuration object for the model. See ``ModelConfig`` for more details.
     """
-    pass
+
+    config: ModelConfig
+    adpt: AdaptorModel
+    gnrt: GeneratorModel
+
+    def __init__(self, config: ModelConfig):
+        super().__init__()
+
+        self.config = config
+
+        self.adpt = AdaptorModel(config)
+        self.gnrt = GeneratorModel(config)
+
+    def forward(self, noise, vision_embedding):
+        return self.gnrt(
+            noise,
+            self.adpt(vision_embedding),
+            reference=None,
+        )
