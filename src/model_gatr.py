@@ -167,12 +167,11 @@ class Img2PCModel(nn.Module):
 
     def forward(self, noise, vision_embedding):
         prompt = self.adaptor(vision_embedding)
-        noise, dummy_scalar = self.embedding(noise, scalars=None)
-        print(dummy_scalar.shape)
+        noise, _ = self.embedding(noise, scalars=None)
 
         point_cloud, _ = self.generator(
             torch.cat([prompt, noise], dim=1),
-            scalars=dummy_scalar,
+            scalars=None,
         )
 
         return point.decode(point_cloud[:, vision_embedding.shape[1]:])
