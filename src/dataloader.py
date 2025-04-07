@@ -6,6 +6,7 @@ from ezgatr.interfaces import point
 from pytorch3d.io import load_obj
 from pytorch3d.ops import sample_points_from_meshes
 from pytorch3d.structures import Meshes
+from PIL import Image
 
 
 class Pix3DObject:
@@ -28,13 +29,8 @@ class Pix3DObject:
     ) -> None:
         self.root = root
         self.meta = meta
-        self.mesh = None
-        if load_on_init:
-            self.load_obj()
-
-    @property
-    def is_initialized(self):
-        return self.mesh is not None
+        self.mesh = self.load_obj()
+        self.image = self.load_img()
 
     def sample_points(
         self, num_samples: int = 1024, to_pga: bool = True,
@@ -66,7 +62,10 @@ class Pix3DObject:
             return point.encode(ret).unsqueeze(-2)
         return ret
 
-    def load_obj(self, normalize: bool = True) -> "Pix3DObject":
+    def load_img(self,):
+        return Image.open(self.root / self.meta["img"])
+
+    def load_obj(self, normalize: bool = True):
         r"""Load the object into mesh and assign to ``self.mesh``.
 
         Load a ``pytorch3d.structures.Meshes`` object from a given
@@ -89,5 +88,4 @@ class Pix3DObject:
             scaler = max(verts.abs().max(dim=0).values)
             verts = (verts - center) / scaler
 
-        self.mesh = Meshes(verts=[verts], faces=[faces.verts_idx])
-        return self
+        return Meshes(verts=[verts], faces=[faces.verts_idx])
