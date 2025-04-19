@@ -196,9 +196,11 @@ class FaceTokenVQ(nn.Module):
         self.config = config
 
         # TODO: There could be better param init method...
-        codebook = torch.randn(
-            config.num_codebook_codes, config.codebook_size, 16,
-            dtype=torch.float32,
+        codebook = nn.Parameter(
+            torch.randn(
+                config.num_codebook_codes, config.codebook_size, 16,
+                dtype=torch.float32,
+            ),
             requires_grad=True,
         )
         self.register_parameter("codebook", codebook)
@@ -404,7 +406,7 @@ class FaceTokenModel(nn.Module):
         tuple[torch.Tensor]
             Reconstructed face, encoded face, codebook codes, in that order.
         """
-        r = r or torch.mean(f, keepdim=True, dim=(1, 2))
+        r = r or torch.mean(f, keepdim=True, dim=(1,))
 
         # Explanation of namings:
         #    - 'x': Encoded faces, i.e., the ``Proj_x(z_e(x))``.
@@ -422,7 +424,7 @@ class FaceTokenModel(nn.Module):
         z = self.proj_z(s)
 
         # Use the average multi-vector across (projected) latent channels as reference.
-        r = torch.mean(z, keepdim=True, dim=(1, 2)).detach()
+        r = torch.mean(z, keepdim=True, dim=(1,)).detach()
         p = reduce(lambda z, l: l(z, r), self.decoder, z)
         return self.proj_o(p), x, e
 
