@@ -1,500 +1,210 @@
+from __future__ import annotations
+
 import math
-from dataclasses import dataclass, field
-from functools import reduce
-from typing import Any, Literal
+from dataclasses import dataclass
+from functools import reduce, partial
+from typing import TYPE_CHECKING, Optional
 
 import torch
 import torch.nn as nn
-from einops import rearrange
 from ezgatr.nn import EquiLinear, EquiRMSNorm
 from ezgatr.nn.functional import (
-    equi_geometric_attention,
     equi_join,
+    inner_product,
     geometric_product,
     scaler_gated_gelu,
 )
 
 
 @dataclass
-class ModelConfig:
-    r"""Configuration for image to point-cloud model.
+class FaceTokenConfig:
+    r"""Configuration object for the face VAE model.
 
     Parameters
     ----------
-    adpt_num_blocks: int
-        Number of vision encoder adaptor (FFN) blocks.
-    adpt_dim_hidden: int
-        Adaptor input and output size. Tying the input and output size
-        together to retain the encoder output dimension. This size must
-        be a multiple of 16 to be compatible with the GATr modules.
-    adpt_dim_intermediate: int
-        Size of the intermediate representations within FFN blocks.
-    gnrt_num_blocks: int
-        Number of point cloud generator blocks.
-    gnrt_dim_hidden: int
-        Number of channels for the hidden representations passed between
-        generator blocks.
-    gnrt_dim_intermediate: int
-        Number of channels passed to the geometric bilinear blocks. The number
-        must be divisible by 2 because the input multi-vectors will be projected
-        to left and right components.
-    gnrt_num_attn_heads: int
-        Number of attention heads in the self-attention and cross-attention blocks.
-    gnrt_lin_bias: bool
-        Whether ``equi_linear`` projection contains bias term. As a reminder, bias
-        terms are only added to the scalar terms of multi-vectors.
-    gnrt_attn_kinds: dict[Literal["ipa", "daa"], dict[str, Any] | None]
-        Kinds of similarity measures to consider in the attention calculation
-        along with additional configuration/parameters sent to the corresponding
-        query-key generating function. One should supply a dictionary mapping
-        from the kind to parameters in addition to query and key tensors. Use
-        ``None`` to denote no additional parameters supplied. Available options:
-        - "ipa": Inner product attention
-        - "daa": Distance-aware attention
     """
 
-    adpt_num_blocks: int = 2
-    adpt_dim_hidden: int = 768
-    adpt_dim_intermediate: int = 1024
-
-    gnrt_num_points: int = 1024
-    gnrt_num_blocks: int = 2
-    gnrt_dim_hidden: int = 48
-    gnrt_dim_intermediate: int = 48
-    gnrt_num_attn_heads: int = 8
-    gnrt_lin_bias: bool = True
-    gnrt_attn_kinds: dict[Literal["ipa", "daa"], dict[str, Any] | None] = field(
-        default_factory=lambda: {"ipa": None, "daa": None}
-    )
+    input_size: int = 4
+    output_size: int = 4
+    hidden_size: int = 8
+    codebook_size: int = 4
+    intermediate_size: int = 16
+    num_encoder_layers: int = 4
+    num_decoder_layers: int = 4
+    num_codebook_codes: int = 1024
+    num_codebook_heads: int = 4
 
 
-class AdaptorBlock(nn.Module):
-    r"""Adaptor layer to transform vision embedding space to GATr space.
-
-    The adaptor FFN is implemented as Gated Linear Units (GLU).
+class FaceTokenBilinear(nn.Module):
+    r"""Implements the geometric bilinear operation in GATr.
 
     Parameters
     ----------
-    config: ModelConfig
-        Configuration for the entire generator model. See ``ModelConfig``
-        for more details.
-    idx: int
-        Layer index.
+    config : FaceTokenConfig
+        Configuration object for the VAE model. See ``FaceTokenConfig`` for more details.
     """
 
-    config: ModelConfig
-    idx: int
-    proj_gate: nn.Linear
-    proj_next: nn.Linear
-    activation: nn.GELU
-    layer_norm: nn.RMSNorm
-
-    def __init__(self, config: ModelConfig, idx: int):
+    def __init__(self, config: FaceTokenConfig):
         super().__init__()
 
         self.config = config
-        self.idx = idx
+        if config.intermediate_size % 2 != 0:
+            msg = f"Intermediate size must be even, got <{config.intermediate_size}>."
+            raise ValueError(msg)
 
-        self.proj_gate = nn.Linear(
-            config.adpt_dim_hidden,
-            config.adpt_dim_intermediate * 2,
-            bias=False,
+        self.proj_b = EquiLinear(config.hidden_size, config.intermediate_size * 2)
+        self.proj_o = EquiLinear(config.intermediate_size, config.hidden_size)
+
+    def forward(self, x, r):
+        geom_l, geom_r, join_l, join_r = torch.split(
+            self.proj_b(x),
+            split_size_or_sections=self.config.intermediate_size // 2,
+            dim=-2,
         )
-        self.proj_next = nn.Linear(
-            config.adpt_dim_intermediate,
-            config.adpt_dim_hidden,
-            bias=False,
+        x = torch.cat(
+            [geometric_product(geom_l, geom_r), equi_join(join_l, join_r, r)],
+            dim=-2,
         )
-        self.activation = nn.GELU(approximate="none")
-        self.layer_norm = nn.RMSNorm(config.adpt_dim_hidden)
-
-    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
-        hidden_res_conn = hidden
-        hidden = self.layer_norm(hidden)
-
-        size_inter = self.config.adpt_dim_intermediate
-        hidden_gated = self.proj_gate(hidden)
-        hidden_gated = (
-            self.activation(hidden_gated[:, :, size_inter:])
-            * hidden_gated[:, :, :size_inter]
-        )
-
-        hidden_gated = self.proj_next(hidden_gated)
-        return hidden_gated + hidden_res_conn
+        return self.proj_o(x)
 
 
-class AdaptorModel(nn.Module):
-    r"""Vision encoder adaptor model.
-
-    It serves the purpose of transforming the vision embeddings from embedding
-    space to multi-vector space.
+class FaceTokenLayer(nn.Module):
+    r"""FFN block with residual connection.
 
     Parameters
     ----------
-    config: ModelConfig
-        Configuration for the entire generator model. See ``ModelConfig``
-        for more details.
+    config : FaceTokenConfig
+        Configuration object for the VAE model. See ``FaceTokenConfig`` for more details.
     """
 
-    config: ModelConfig
-    blocks: nn.ModuleList
-
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: FaceTokenConfig):
         super().__init__()
 
         self.config = config
 
-        self.blocks = nn.ModuleList(
-            AdaptorBlock(config, i) for i in range(config.adpt_num_blocks)
+        self.bili = FaceTokenBilinear(config)
+        self.proj = EquiLinear(config.hidden_size, config.hidden_size)
+        self.norm = EquiRMSNorm(config.hidden_size, 1e-6)
+
+    def forward(self, x, r):
+        c = x
+        x = scaler_gated_gelu(self.bili(self.norm(x), r), "none")
+        return self.proj(x) + c
+
+
+class FaceTokenCodeBook(nn.Module):
+    r""""""
+
+    def __init__(self, config: FaceTokenConfig):
+        super().__init__()
+
+        self.config = config
+
+        self.proj_h = EquiLinear(config.hidden_size, config.num_codebook_heads)
+        self.proj_o = EquiLinear(config.num_codebook_heads, config.hidden_size)
+        self.lookup = nn.Embedding(config.num_codebook_codes, config.codebook_size * 16)
+
+    def forward(self, x):
+        pass
+
+
+class FaceTokenModel(nn.Module):
+    r"""The Face VAE model of mesh tokenizer.
+
+    Parameters
+    ----------
+    config : FaceTokenConfig
+        Configuration object for the VAE model. See ``FaceTokenConfig`` for more details.
+    """
+
+    def __init__(self, config: FaceTokenConfig):
+        super().__init__()
+
+        self.config = config
+
+        self.proj_i = EquiLinear(config.input_size, config.hidden_size)
+        self.proj_o = EquiLinear(config.hidden_size, config.output_size)
+        self.codebook = FaceTokenCodeBook(config)
+        self.encoder = nn.ModuleList(
+            FaceTokenLayer(config) for _ in range(config.num_encoder_layers)
         )
-        self.apply(self._init_params)
+        self.decoder = nn.ModuleList(
+            FaceTokenLayer(config) for _ in range(config.num_decoder_layers)
+        )
 
-    def _init_params(self, module: nn.Module):
-        r"""Parameter initialization for all adaptor modules.
+        self.codebook.apply(self._init_params)
+        self.encoder.apply(partial(self._init_params, n=config.num_encoder_layers))
+        self.decoder.apply(partial(self._init_params, n=config.num_decoder_layers))
 
-        Slight adjustment to Kaiming init by down-scaling the weights
-        by the number of encoder layers, following the GPT-2 paper.
+    def _init_params(self, m: nn.Module, n: int = 1) -> None:
+        r"""Initialize layers with modified kaiming normal.
+
+        In the GPT-2 paper [1]_, the linear layers weights are down scaled by the square
+        root of number of layers to enhance stability. But this might be trivial in this
+        case because the encoder and decoder models are pretty shallow.
 
         Parameters
         ----------
-        module : nn.Module
+        m : nn.Module
             Module to initialize.
+        n : int
+            Number of layers in the sub-network.
+
+        References
+        ----------
+        .. [1] `"Language Models are Unsupervised Multitask Learners", Radford et al., 2020
+                <https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf>`_
         """
-        if isinstance(module, nn.Linear):
-            nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
-            module.weight.data /= math.sqrt(self.config.adpt_num_blocks)
-            if module.bias is not None:
-                nn.init.zeros_(module.bias)
+        if isinstance(m, EquiLinear):
+            nn.init.kaiming_normal_(m.weight)
+            m.weight.data /= math.sqrt(n)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+        if isinstance(m, nn.Embedding):
+            nn.init.kaiming_uniform_(m.weight)
 
-    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
-        r"""Adaptor forward pass.
+    def forward(self, f: torch.Tensor, r: Optional[torch.Tensor] = None) -> tuple[torch.Tensor]:
+        r"""Forward pass of mesh face VAE.
 
-        Simply pass through all adaptor blocks and rearrange to channels of
-        multi-vectors in the end.
+        This method pass through both the encoder and decoder components of face VAE to
+        obtain the reconstructed face, encoded face, and associated codebook latent. The
+        outputs should be supplied to VAE losses.
+
+        For tokenizer inference, please checkout ``FaceTokenModel.encode`` and associated
+        ``FaceTokenModel.decode`` methods.
 
         Parameters
         ----------
-        hidden: torch.Tensor
-            The output from vision encoder. The hidden dimension must be
-            divisible by 16 to be compatible with GATr generator.
+        f : torch.Tensor
+            Batch of mesh faces encoded as multi-vectors. Expecting shape ``(B, C, 16)``
+            where ``C`` denotes the number of input channels. This can vary depending on
+            the face encoding schema.
+        r : Optional[torch.Tensor]
+            Batch of reference multi-vectors used in the ``equi_join`` operation. This is
+            only supplied to the join operations in encoder layers. If not supplied, the
+            average multi-vectors across the input channels will be used. Decoder layers
+            will use the average of latent multi-vectors channels as the reference.
 
         Returns
         -------
-        torch.Tensor
-            Transformed vision embedding represented as multi-vectors.
+        tuple[torch.Tensor]
+
         """
-        hidden = reduce(lambda x, block: block(x), self.blocks, hidden)
-        return rearrange(hidden, "... (c k) -> ... c k", k=16)
+        r = r or torch.mean(f, keepdim=True, dim=(1, 2))
+        e = reduce(lambda x, l: l(x, r), self.encoder, self.proj_i(f))
+        z = self.codebook(e)
+        r = torch.mean(z, keepdim=True, dim=(1, 2)).detach()
+        f = reduce(lambda x, l: l(x, r), self.decoder, z)
+        return self.proj_o(f)
 
-
-class GeneratorBilinear(nn.Module):
-    r"""Implements the geometric bilinear sub-layer of the geometric MLP.
-
-    Geometric bilinear operation consists of geometric product and equivariant
-    join operations. The results of two operations are concatenated along the
-    hidden channel axis and passed through a final equivariant linear projection
-    before being passed to the next layer, block, or module.
-
-    In both geometric product and equivariant join operations, the input
-    multi-vectors are first projected to a hidden space with the same number of
-    channels, i.e., left and right. Then, the results of each operation are
-    derived from the interaction of left and right hidden representations, each
-    with half number of ``gnrt_dim_intermediate``.
-
-    Parameters
-    ----------
-    config: ModelConfig
-        Configuration object for the model. See ``ModelConfig`` for more details.
-    """
-
-    config: ModelConfig
-    proj_bili: EquiLinear
-    proj_next: EquiLinear
-
-    def __init__(self, config: ModelConfig):
-        super().__init__()
-
-        self.config = config
-
-        if config.gnrt_dim_intermediate % 2 != 0:
-            raise ValueError("Number of intermediate channels must be even.")
-
-        self.proj_bili = EquiLinear(
-            config.gnrt_dim_hidden,
-            config.gnrt_dim_intermediate * 2,
-            bias=config.gnrt_lin_bias,
-        )
-        self.proj_next = EquiLinear(
-            config.gnrt_dim_intermediate,
-            config.gnrt_dim_hidden,
-            bias=config.gnrt_lin_bias,
-        )
-
-    def forward(
-        self, hidden: torch.Tensor, reference: torch.Tensor | None = None
-    ) -> torch.Tensor:
-        r"""Forward pass of the geometric bilinear block.
-
-        Parameters
-        ----------
-        hidden: torch.Tensor
-            Batch of input hidden multi-vector representation tensor.
-        reference : torch.Tensor, optional
-            Reference tensor for the equivariant join operation.
-
-        Returns
-        -------
-        torch.Tensor
-            Batch of output hidden multi-vector representation tensor of the
-            same number of hidden channels.
+    @torch.no_grad
+    def encode(self, f: torch.Tensor) -> torch.LongTensor:
+        r"""Encode pass at inference time.
         """
-        size_inter = self.config.gnrt_dim_intermediate // 2
-        lg, rg, lj, rj = torch.split(self.proj_bili(hidden), size_inter, dim=-2)
+        self.eval()
 
-        hidden = torch.cat(
-            [geometric_product(lg, rg), equi_join(lj, rj, reference)], dim=-2
-        )
-        return self.proj_next(hidden)
-
-
-class GeneratorMLP(nn.Module):
-    r"""Geometric MLP layer.
-
-    Here we fix the structure of the MLP block to be a single equivariant linear
-    projection followed by a gated GELU activation function. In addition, the
-    equivariant normalization layer can be configured to be learnable.
-
-    Parameters
-    ----------
-    config: ModelConfig
-        Configuration object for the model. See ``ModelConfig`` for more details.
-    """
-
-    config: ModelConfig
-    equi_bili: GeneratorBilinear
-    proj_next: EquiLinear
-    layer_norm: EquiRMSNorm
-
-    def __init__(self, config: ModelConfig):
-        super().__init__()
-
-        self.config = config
-
-        self.equi_bili = GeneratorBilinear(config)
-        self.proj_next = EquiLinear(
-            config.gnrt_dim_hidden,
-            config.gnrt_dim_hidden,
-            bias=config.gnrt_lin_bias,
-        )
-        self.layer_norm = EquiRMSNorm(config.gnrt_dim_hidden)
-
-    def forward(
-        self, hidden: torch.Tensor, reference: torch.Tensor | None = None
-    ) -> torch.Tensor:
-        r"""Forward pass of the geometric MLP block.
-
-        Parameters
-        ----------
-        hidden: torch.Tensor
-            Batch of input hidden multi-vector representation tensor.
-        reference : torch.Tensor, optional
-            Reference tensor for the equivariant join operation. By default,
-            the average value of all tokens and all channels will be used as
-            the reference multi-vector.
-
-        Returns
-        -------
-        torch.Tensor
-            Batch of output hidden multi-vector representation tensor of the
-            same number of hidden channels.
+    @torch.no_grad
+    def decode(self, i: torch.LongTensor) -> torch.Tensor:
+        f"""Decode pass at inference time.
         """
-        hidden_res_conn = hidden
-        reference = reference or torch.mean(
-            hidden,
-            dim=tuple(range(1, len(hidden.shape) - 1)),
-            keepdim=True,
-        )
-
-        hidden = self.equi_bili(self.layer_norm(hidden), reference)
-        hidden = self.proj_next(scaler_gated_gelu(hidden, "none"))
-
-        return hidden + hidden_res_conn
-
-
-class GeneratorSelfAttention(nn.Module):
-    r"""Geometric self-attention block without scaler channels.
-
-    The GATr attention calculation is slightly different from the original
-    transformers implementation in that each head has the sample number-of-
-    channels as the input tensor, instead of dividing into smaller chunks.
-    In this case, the final output linear transformation maps from
-    ``gnrt_dim_hidden * gnrt_num_attn_heads`` to ``gnrt_dim_hidden``.
-
-    Parameters
-    ----------
-    config : ModelConfig
-        Configuration object for the model. See ``ModelConfig`` for more details.
-    """
-
-    config: ModelConfig
-    proj_attn: EquiLinear
-    proj_next: EquiLinear
-    layer_norm: EquiRMSNorm
-
-    def __init__(self, config: ModelConfig):
-        super().__init__()
-
-        self.config = config
-
-        self.proj_attn = EquiLinear(
-            config.gnrt_dim_hidden,
-            config.gnrt_dim_hidden * config.gnrt_num_attn_heads * 3,
-            bias=config.gnrt_lin_bias,
-        )
-        self.proj_next = EquiLinear(
-            config.gnrt_dim_hidden * config.gnrt_num_attn_heads,
-            config.gnrt_dim_hidden,
-            bias=config.gnrt_lin_bias,
-        )
-        self.layer_norm = EquiRMSNorm(config.gnrt_dim_hidden)
-
-    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
-        hidden_res_conn = hidden
-        hidden = self.layer_norm(hidden)
-
-        q, k, v = rearrange(
-            self.proj_attn(hidden),
-            "b t (qkv h c) k -> qkv b h t c k",
-            qkv=3,
-            h=self.config.gnrt_num_attn_heads,
-            c=self.config.gnrt_dim_hidden,
-        )
-        hidden, _ = equi_geometric_attention(
-            q,
-            k,
-            v,
-            kinds=self.config.attn_kinds,
-            is_causal=False,
-        )
-        hidden = rearrange(
-            hidden,
-            "b h t c k -> b t (h c) k",
-            h=self.config.gnrt_num_attn_heads,
-        )
-        hidden = self.proj_next(hidden)
-
-        return hidden + hidden_res_conn
-
-
-class GeneratorCrossAttention(nn.Module):
-    r"""Cross attention layer for vision information intake.
-
-    Parameters
-    ----------
-    config: ModelConfig
-        Configuration object for the model. See ``ModelConfig`` for more details.
-    """
-
-    config: ModelConfig
-    proj_attn_gnrt: EquiLinear
-    proj_attn_adpt: EquiLinear
-    proj_next: EquiLinear
-    layer_norm: EquiRMSNorm
-
-    def __init__(self, config: ModelConfig):
-        super().__init__()
-
-        self.config = config
-
-        self.proj_attn_adpt = EquiLinear(
-            config.gnrt_dim_hidden,
-            config.gnrt_dim_hidden * config.gnrt_num_attn_heads * 2,
-            bias=config.gnrt_lin_bias,
-        )
-        self.proj_attn_gnrt = EquiLinear(
-            config.gnrt_dim_hidden,
-            config.gnrt_dim_hidden * config.gnrt_num_attn_heads,
-            bias=config.gnrt_lin_bias,
-        )
-        self.proj_next = EquiLinear(
-            config.gnrt_dim_hidden * config.gnrt_num_attn_heads,
-            config.gnrt_dim_hidden,
-            bias=config.gnrt_lin_bias,
-        )
-        self.layer_norm = EquiRMSNorm(config.gnrt_dim_hidden)
-
-    def forward(
-        self,
-        hidden: torch.Tensor,
-        vision_embedding: torch.Tensor,
-    ) -> torch.Tensor:
-        hidden_res_conn = hidden
-        hidden = self.layer_norm(hidden)
-
-        # Not sure if we should do layer norm to vision embeddings
-        vision_embedding = self.layer_norm(hidden)
-
-        # Regular QKV stuff with KV generated from vision embeddings
-        q = rearrange(
-            self.proj_attn_gnrt(hidden),
-            "b t (h c) k -> b h t c k",
-            h=self.config.gnrt_num_attn_heads,
-            c=self.config.gnrt_dim_hidden,
-        )
-        k, v = rearrange(
-            self.proj_attn_adpt(vision_embedding),
-            "b t (kv h c) k -> kv b h t c k",
-            kv=2,
-            h=self.config.gnrt_num_attn_heads,
-            c=self.config.gnrt_dim_hidden,
-        )
-        hidden, _ = equi_geometric_attention(
-            q,
-            k,
-            v,
-            kinds=self.config.attn_kinds,
-            is_causal=False,
-        )
-        hidden = rearrange(
-            hidden,
-            "b h t c k -> b t (h c) k",
-            h=self.config.gnrt_num_attn_heads,
-        )
-        hidden = self.proj_next(hidden)
-
-        return hidden + hidden_res_conn
-
-
-class GeneratorBlock(nn.Module):
-    r"""Combining MLP, self-attention, and cross-attention together.
-
-    Parameters
-    ----------
-    config: ModelConfig
-        Configuration object for the model. See ``ModelConfig`` for more details.
-    """
-
-    config: ModelConfig
-    idx: int
-    mlp: GeneratorMLP
-    attn_self: GeneratorSelfAttention
-    attn_cross: GeneratorCrossAttention
-
-    def __init__(self, config: ModelConfig, idx: int):
-        super().__init__()
-
-        self.config = config
-        self.idx = idx
-
-        self.mlp = GeneratorMLP(config)
-        self.attn_self = GeneratorSelfAttention(config)
-        self.attn_cross = GeneratorCrossAttention(config)
-
-    def forward(
-        self,
-        hidden: torch.Tensor,
-        vision_embedding: torch.Tensor,
-        reference: torch.Tensor | None,
-    ) -> torch.Tensor:
-        hidden = self.attn_cross(self.attn_self(hidden), vision_embedding)
-        return self.mlp(hidden, reference)
+        self.eval()
