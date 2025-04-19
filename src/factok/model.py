@@ -86,7 +86,42 @@ def _linear_square_normalizer(e123: torch.Tensor, eps: float = 1e-3) -> torch.Te
     return e123 / (e123.pow(2) + eps)
 
 
-def _compute_da_elem(x_or_e: torch.Tensor) -> torch.Tensor:
+@lru_cache(maxsize=None, typed=True)
+def _compute_da_qk_basis(
+    device: torch.device, dtype: torch.dtype
+) -> tuple[torch.Tensor, torch.Tensor]:
+    r"""Compute basis queries and keys in the distance-aware attention.
+
+    Parameters
+    ----------
+    device: torch.device
+        Device for the basis.
+    dtype: torch.dtype
+        Data type for the basis.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        Basis tensor for the queries and keys in the distance-aware attention.
+        Both with shape (4, 4, 5).
+    """
+    bq = torch.zeros((4, 4, 5), device=device, dtype=dtype)
+    bk = torch.zeros((4, 4, 5), device=device, dtype=dtype)
+    r3 = torch.arange(3, device=device)
+
+    bq[r3, r3, 0] = 1.0
+    bk[3, 3, 0] = -1.0
+
+    bq[3, 3, 1] = 1.0
+    bk[r3, r3, 1] = -1.0
+
+    bq[r3, 3, r3 + 2] = 1.0
+    bk[r3, 3, r3 + 2] = 2.0
+
+    return bq, bk
+
+
+def _compute_da_elem(x_or_e: torch.Tensor, basis: torch.Tensor) -> torch.Tensor:
     r"""Compute the basis for distance-aware attention.
 
     Please refer to the GATr paper [1]_ for more details.
@@ -97,6 +132,11 @@ def _compute_da_elem(x_or_e: torch.Tensor) -> torch.Tensor:
         <https://arxiv.org/abs/2305.18415>`_
     """
     idx = _compute_tv_selector(x_or_e.device)
+    tri = x_or_e[..., idx]
+    ret = tri * _linear_square_normalizer(tri[..., [3]], eps=1e-3)
+    return _flatten_mv(
+        torch.einsum("ijk, ...i, ...j -> ...k", basis, ret, ret)
+    )
 
 
 def compute_xe_dist(x: torch.Tensor, e: torch.Tensor) -> torch.Tensor:
@@ -141,8 +181,9 @@ def compute_xe_dist(x: torch.Tensor, e: torch.Tensor) -> torch.Tensor:
     .. [2] `"Geometric Algebra Transformer", Brehmer et al., 2023
             <https://arxiv.org/abs/2305.18415>`_
     """
-    q = torch.cat([_compute_ip_elem(x), _compute_da_elem(x)], dim=-1)
-    k = torch.cat([_compute_ip_elem(e), _compute_da_elem(e)], dim=-1)
+    bq, bk = _compute_da_qk_basis(x.device, x.dtype)
+    q = torch.cat([_compute_ip_elem(x), _compute_da_elem(x, bq)], dim=-1)
+    k = torch.cat([_compute_ip_elem(e), _compute_da_elem(e, bk)], dim=-1)
     return q @ k.T
 
 
@@ -161,6 +202,7 @@ class FaceTokenVQ(nn.Module):
             requires_grad=True,
         )
         self.register_parameter("codebook", codebook)
+        self.proj_m = EquiLinear(config.codebook_size, config.codebook_size)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         r"""Lookup the codebook and return ``num_codebook_heads`` codes for each head.
@@ -190,12 +232,16 @@ class FaceTokenVQ(nn.Module):
             k=16,
         )
 
+        # Let's perform a grade-mixing first to make sure the 'e_0' blades are updated
+        e = self.proj_m(self.codebook)
+        assert e.shape == self.codebook.shape
+
         # Note that we are using the inner product "distance" here instead of L2,
         #     so we should do an 'argmax' operation. Then followed by straight-through
         #     gradient component.
-        i = compute_xe_dist(x_flat, self.codebook).argmax(dim=-1).squeeze()
+        i = compute_xe_dist(x_flat, e).argmax(dim=-1).squeeze()
         e = rearrange(
-            self.codebook[i],
+            e[i],
             "(b h) d k -> b (h d) k",
             h=self.config.num_codebook_heads,
             d=self.config.codebook_size,
@@ -206,7 +252,7 @@ class FaceTokenVQ(nn.Module):
     @torch.no_grad
     def lookup(self, i: torch.LongTensor) -> torch.Tensor:
         return rearrange(
-            self.codebook[i].detach(),
+            self.proj_m(self.codebook[i]).detach(),
             "(b h) d k -> b (h d) k",
             h=self.config.num_codebook_heads,
             d=self.config.codebook_size,
