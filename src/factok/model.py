@@ -29,7 +29,7 @@ class FaceTokenConfig:
     output_size: int = 4
     hidden_size: int = 8
     codebook_size: int = 4
-    frozen_codebook_size: int = 2
+    frozen_codebook_size: int = 4
     intermediate_size: int = 16
     num_encoder_layers: int = 4
     num_decoder_layers: int = 4
