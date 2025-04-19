@@ -1,38 +1,26 @@
 [project]
-name = "img2pc"
+name = "factok"
 version = "0.1.0"
-description = "Simple image to point cloud model with GATr"
+description = "Efficient mesh tokenization with face encoder."
 authors = [
     {name = "guest400123064", email = "wangy49@alumni.upenn.edu"},
     {name = "M4D-SC1ENTIST", email = "xiatao.sun@yale.edu"}
 ]
 license = {file = "LICENSE"}
 readme = "README.md"
+packages = [
+    { include = "factok", from = "src" }
+]
 requires-python = ">=3.10"
 dependencies = [
-    "ezgatr @ file:///home/catcat/projects/ezgatr",
-    "transformers (>=4.48.3,<5.0.0)",
-    "pillow (>=11.1.0,<12.0.0)",
-    "iopath (>=0.1.10,<0.2.0)",
-    "fvcore (>=0.1.5.post20221221,<0.2.0)",
-    "numpy (<2.0.0)",
+    "ezgatr @ file:///~/projects/ezgatr",
     "pytorch3d @ https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu121_pyt230/pytorch3d-0.7.6-cp310-cp310-linux_x86_64.whl",
-    "opt-einsum @ git+https://github.com/dgasmith/opt_einsum.git@1a984b7b75f3e532e7129f6aa13f7ddc3da66e10",
-    "xformers (==0.0.27)",
-    "hydra-core (>=1.3.2,<2.0.0)",
-    "mlflow (>=2.20.3,<3.0.0)",
-    "torch-ema (>=0.3,<0.4)",
-    "pydantic-settings (>=2.8.1,<3.0.0)",
-    "tqdm (>=4.67.1,<5.0.0)",
-    "bpython (>=0.25,<0.26)",
+    "trimesh (>=4.6.8,<5.0.0)",
 ]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
-
-[tool.poetry]
-package-mode = false
 
 [tool.poetry.dependencies]
 ezgatr = {develop = true}
