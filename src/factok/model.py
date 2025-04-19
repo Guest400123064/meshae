@@ -7,6 +7,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from einops import rearrange
 from ezgatr.nn import EquiLinear, EquiRMSNorm
 from ezgatr.nn.functional import (
@@ -28,183 +29,86 @@ class FaceTokenConfig:
     output_size: int = 4
     hidden_size: int = 8
     codebook_size: int = 4
+    frozen_codebook_size: int = 2
     intermediate_size: int = 16
     num_encoder_layers: int = 4
     num_decoder_layers: int = 4
     num_codebook_codes: int = 1024
     num_codebook_heads: int = 4
-    ema_decay: float = 0.99
-
-
-@lru_cache(maxsize=None, typed=True)
-def _compute_ip_selector(
-    device: torch.device, keep_tri_vector: bool = True
-) -> torch.Tensor:
-    r"""Get blades involved in the inner product calculation."""
-
-    idx = [0, 2, 3, 4, 8, 9, 10, 14]
-    if not keep_tri_vector:
-        idx.pop(-1)
-    return torch.tensor(idx, device=device)
-
-
-@lru_cache(maxsize=None, typed=True)
-def _compute_tv_selector(device: torch.device) -> torch.Tensor:
-    r"""Get blades corresponding to tri-vectors."""
-
-    return torch.tensor([11, 12, 13, 14], device=device)
-
-
-def _flatten_mv(mv: torch.Tensor) -> torch.Tensor:
-    r"""Shortcut for flattening multi-vector dimensions."""
-
-    return rearrange(mv, "... c k -> ... (c k)")
-
-
-def _compute_ip_elem(x_or_e: torch.Tensor) -> torch.Tensor:
-    r"""Simply select inner product blades and flatten the multi-vector dimension."""
-
-    idx = _compute_ip_selector(x_or_e.device, keep_tri_vector=False)
-    return _flatten_mv(x_or_e[..., idx])
-
-
-def _linear_square_normalizer(e123: torch.Tensor, eps: float = 1e-3) -> torch.Tensor:
-    r"""Apply linear square normalization to the input tensor.
-
-    Parameters
-    ----------
-    e123 : torch.Tensor
-        Coefficients corresponds to the ``e_{123}`` blade.
-    eps : float
-        Small value to avoid division by zero.
-
-    Returns
-    -------
-    torch.Tensor
-        Normalized multi-vector tensor.
-    """
-    return e123 / (e123.pow(2) + eps)
-
-
-@lru_cache(maxsize=None, typed=True)
-def _compute_da_qk_basis(
-    device: torch.device, dtype: torch.dtype
-) -> tuple[torch.Tensor, torch.Tensor]:
-    r"""Compute basis queries and keys in the distance-aware attention.
-
-    Parameters
-    ----------
-    device: torch.device
-        Device for the basis.
-    dtype: torch.dtype
-        Data type for the basis.
-
-    Returns
-    -------
-    tuple[torch.Tensor, torch.Tensor]
-        Basis tensor for the queries and keys in the distance-aware attention.
-        Both with shape (4, 4, 5).
-    """
-    bq = torch.zeros((4, 4, 5), device=device, dtype=dtype)
-    bk = torch.zeros((4, 4, 5), device=device, dtype=dtype)
-    r3 = torch.arange(3, device=device)
-
-    bq[r3, r3, 0] = 1.0
-    bk[3, 3, 0] = -1.0
-
-    bq[3, 3, 1] = 1.0
-    bk[r3, r3, 1] = -1.0
-
-    bq[r3, 3, r3 + 2] = 1.0
-    bk[r3, 3, r3 + 2] = 2.0
-
-    return bq, bk
-
-
-def _compute_da_elem(x_or_e: torch.Tensor, basis: torch.Tensor) -> torch.Tensor:
-    r"""Compute the basis for distance-aware attention.
-
-    Please refer to the GATr paper [1]_ for more details.
-
-    References
-    ----------
-    .. [2] `"Geometric Algebra Transformer", Brehmer et al., 2023
-        <https://arxiv.org/abs/2305.18415>`_
-    """
-    idx = _compute_tv_selector(x_or_e.device)
-    tri = x_or_e[..., idx]
-    ret = tri * _linear_square_normalizer(tri[..., [3]], eps=1e-3)
-    return _flatten_mv(
-        torch.einsum("ijk, ...i, ...j -> ...k", basis, ret, ret)
-    )
-
-
-def compute_xe_dist(x: torch.Tensor, e: torch.Tensor) -> torch.Tensor:
-    r"""Compute the inner product distance between every ``x`` and ``e``.
-
-    In the original VQ-VAE paper [1]_, the authors use the Euclidean distance
-    between encoded inputs and codebook codes to determine the nearest code.
-    However, since geometric algebra representations have strict geometric
-    interpretations, we chose to have the distance function aligned with the
-    equi-variant geometric attention formulation in GATr [2]_. Specifically,
-    the distances are decomposed into an inner product component and distance
-    (3D space) aware component.
-
-    TODO: There is one thing we may need to check later, which is whether blades
-    involving ``e_0`` elements are updated or not. From the current distance
-    calculation, it seems that the ``e_0`` elements are never updated. Thus, this
-    may creates a situation where the encoder is well-trained while the codebook
-    was under-trained. Probably an easy way to fix this is to pass the codes through
-    a grade-mixing layer first.
-
-    Parameters
-    ----------
-    x : torch.Tensor
-        Reshaped multi-head encoded faces with shape ``((B * H), D, 16)`` where
-        ``D`` denotes the number of channels in each code.
-    e : torch.Tensor
-        Codebook of shape ``(K, D, 16)`` where ``K`` denotes the number of codebook
-        codes and ``D`` denotes the number of channels in each code. This distance
-        function is also used to compute the dictionary loss. In that case, the
-        ``e`` input is expected to have shape ``((B * H), D, 16)`` as well.
-
-    Returns
-    -------
-    torch.Tensor
-        A dot product matrix of shape ``((B * H), K)`` where ``H`` denotes the
-        number of codebook heads and ``K`` denotes the number of codebook codes.
-
-    References
-    ----------
-    .. [1] `"Neural Discrete Representation Learning", Van Den Oord et al., 2018
-            <https://arxiv.org/abs/2305.18415>`_
-    .. [2] `"Geometric Algebra Transformer", Brehmer et al., 2023
-            <https://arxiv.org/abs/2305.18415>`_
-    """
-    bq, bk = _compute_da_qk_basis(x.device, x.dtype)
-    q = torch.cat([_compute_ip_elem(x), _compute_da_elem(x, bq)], dim=-1)
-    k = torch.cat([_compute_ip_elem(e), _compute_da_elem(e, bk)], dim=-1)
-    return q @ k.T
 
 
 class FaceTokenVQ(nn.Module):
-    r""""""
+    r"""Face encoding vector quantizer.
+
+    """
 
     def __init__(self, config: FaceTokenConfig):
         super().__init__()
 
         self.config = config
 
-        # TODO: There could be better param init method...
-        codebook = nn.Parameter(
+        # The codebook initialization method follows @lucidrains's vector-quantize-pytorch
+        #     by paring a Gaussian random noise frozen notebook with a codebook transformation.
+        #     We set the transformation to a be simple EquiLinear operation.
+        frozen_codebook = (
             torch.randn(
-                config.num_codebook_codes, config.codebook_size, 16,
+                config.num_codebook_codes, config.frozen_codebook_size, 16,
                 dtype=torch.float32,
-            ),
-            requires_grad=True,
+                requires_grad=False,
+            )
+            / math.sqrt(config.frozen_codebook_size)
         )
-        self.register_parameter("codebook", codebook)
-        self.proj_m = EquiLinear(config.codebook_size, config.codebook_size)
+        self.register_buffer("frozen_codebook", frozen_codebook)
+        self.code_transform = EquiLinear(config.frozen_codebook_size, config.codebook_size)
+
+    @property
+    def codebook(self) -> torch.Tensor:
+        return self.code_transform(self.frozen_codebook)
+
+    def _rearrange_x_shape(self, t, is_restore=False):
+        expr = "b (h d) k -> (b h) (d k)"
+        if is_restore:
+            expr = "(b h) (d k) -> b (h d) k"
+        return rearrange(
+            t,
+            expr,
+            h=self.config.num_codebook_heads,
+            d=self.config.codebook_size,
+            k=16,
+        )
+
+    def _rotate_x_to_e(self, x: torch.Tensor, e: torch.Tensor) -> torch.Tensor:
+        r"""Rotate ``x`` to ``e`` with Householder transformation.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Flattened encoded mesh faces of shape ``((B * H), (D * 16))``.
+        e : torch.Tensor
+            Selected batch of code with the same shape as ``x``.
+
+        Returns
+        -------
+        torch.Tensor
+            The transformed ``x`` to match ``e`` numerically.
+        """
+
+        def _div(n, d):
+            return n / d.clamp(min=1e-6)
+
+        def _rot(xd, ed, x):
+            sd = F.normalize(xd + ed, p=2, dim=-1, eps=1e-6).detach()
+            return (
+                x
+                - 2 * sd * (sd * x).sum(dim=-1, keepdim=True)
+                + 2 * ed.detach() * (xd.detach() * x).sum(dim=-1, keepdim=True)
+            )
+
+        xn = x.norm(dim=-1, keepdim=True)
+        en = e.norm(dim=-1, keepdim=True)
+
+        r = _rot(_div(x, xn), _div(e, en), x)
+        return r * _div(en, xn).detach()
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         r"""Lookup the codebook and return ``num_codebook_heads`` codes for each head.
@@ -212,54 +116,27 @@ class FaceTokenVQ(nn.Module):
         Parameters
         ----------
         x : torch.Tensor
-            Multi-head encoded batch of faces with shape ``(B, (H * D), 16)`` where
-            ``H`` denotes the number of heads and ``D`` denotes the number of channels
-            in each code.
+            Multi-head encoded batch of faces with shape ``(B, (H * D), 16)`` where ``H`` denotes
+            the number of heads and ``D`` denotes the number of channels in each code.
 
         Returns
         -------
         tuple[torch.Tensor, torch.Tensor]
-            The codes directly selected from the codebook and the numerically-equivalent
-            codes for the straight-through gradient computation [1]_.
-
-        References
-        ----------
-        .. [1] `"Neural Discrete Representation Learning", Van Den Oord et al., 2018
-            <https://arxiv.org/abs/2305.18415>`_
+            The codes directly selected from the codebook and the "straight-through" quantization
+            estimated from the rotation trick.
         """
-        x_flat = rearrange(
-            x, "b (h d) k -> (b h) d k",
-            h=self.config.num_codebook_heads,
-            d=self.config.codebook_size,
-            k=16,
-        )
+        x = self._rearrange_x_shape(x)
+        codebook_cache = rearrange(self.codebook, "... d k -> ... (d k)")
+        with torch.no_grad():
+            i = torch.cdist(x, codebook_cache, p=2).argmin(dim=-1).squeeze()
 
-        # Let's perform a grade-mixing first to make sure the 'e_0' blades are updated
-        e = self.proj_m(self.codebook)
-        assert e.shape == self.codebook.shape
-
-        # Note that we are using the inner product "distance" here instead of L2,
-        #     so we should do an 'argmax' operation. Then followed by straight-through
-        #     gradient component.
-        i = compute_xe_dist(x_flat, e).argmax(dim=-1).squeeze()
-        e = rearrange(
-            e[i],
-            "(b h) d k -> b (h d) k",
-            h=self.config.num_codebook_heads,
-            d=self.config.codebook_size,
-            k=16,
-        )
-        return e, (e - x).detach() + x
+        e = codebook_cache[i]
+        s = self._rearrange_x_shape(self._rotate_x_to_e(x, e), is_restore=True)
+        return self._rearrange_x_shape(e, is_restore=True), s
 
     @torch.no_grad
     def lookup(self, i: torch.LongTensor) -> torch.Tensor:
-        return rearrange(
-            self.proj_m(self.codebook[i]).detach(),
-            "(b h) d k -> b (h d) k",
-            h=self.config.num_codebook_heads,
-            d=self.config.codebook_size,
-            k=16,
-        )
+        return self._rearrange_x_shape(self.codebook[i])
 
 
 class FaceTokenBilinear(nn.Module):
@@ -406,13 +283,13 @@ class FaceTokenModel(nn.Module):
         tuple[torch.Tensor]
             Reconstructed face, encoded face, codebook codes, in that order.
         """
-        r = r or torch.mean(f, keepdim=True, dim=(1,))
+        r = r or torch.mean(f, keepdim=True, dim=tuple(range(1, len(f.shape) - 1)))
 
         # Explanation of namings:
-        #    - 'x': Encoded faces, i.e., the ``Proj_x(z_e(x))``.
+        #    - 'x': Encoded faces, i.e., the output from ``z_e(x)``.
         #    - 'e': Nearest codebook code from 'x', i.e., the ``e_k``.
-        #    - 's': Numerically the same as 'e', used for straight-through gradient.
-        #    - 'z': Latent input for decoder, i.e., the ``Proj_z(z_q(x))``.
+        #    - 's': Straight through component for encoder gradient flow.
+        #    - 'z': Latent input for decoder, i.e., the input to ``z_q(x)``.
         f = reduce(lambda f, l: l(f, r), self.encoder, self.proj_i(f))
         x = self.proj_x(f)
 
@@ -424,7 +301,7 @@ class FaceTokenModel(nn.Module):
         z = self.proj_z(s)
 
         # Use the average multi-vector across (projected) latent channels as reference.
-        r = torch.mean(z, keepdim=True, dim=(1,)).detach()
+        r = torch.mean(z, keepdim=True, dim=tuple(range(1, len(z.shape) - 1))).detach()
         p = reduce(lambda z, l: l(z, r), self.decoder, z)
         return self.proj_o(p), x, e
 
