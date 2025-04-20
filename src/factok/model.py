@@ -28,13 +28,13 @@ class FaceTokenConfig:
     input_size: int = 4
     output_size: int = 4
     hidden_size: int = 8
-    codebook_size: int = 4
-    frozen_codebook_size: int = 4
-    intermediate_size: int = 16
-    num_encoder_layers: int = 4
-    num_decoder_layers: int = 4
-    num_codebook_codes: int = 1024
-    num_codebook_heads: int = 4
+    intermediate_size: int = 8
+    codebook_size: int = 2
+    frozen_codebook_size: int = 2
+    num_encoder_layers: int = 3
+    num_decoder_layers: int = 3
+    num_codebook_codes: int = 256
+    num_codebook_heads: int = 8
 
 
 class FaceTokenVQ(nn.Module):
@@ -59,11 +59,12 @@ class FaceTokenVQ(nn.Module):
             / math.sqrt(config.frozen_codebook_size)
         )
         self.register_buffer("frozen_codebook", frozen_codebook)
-        self.code_transform = EquiLinear(config.frozen_codebook_size, config.codebook_size)
+        self.proj_i = EquiLinear(config.frozen_codebook_size, config.codebook_size)
+        self.proj_o = EquiLinear(config.codebook_size, config.codebook_size)
 
     @property
     def codebook(self) -> torch.Tensor:
-        return self.code_transform(self.frozen_codebook)
+        return self.proj_o(scaler_gated_gelu(self.proj_i(self.frozen_codebook)))
 
     def _rearrange_x_shape(self, t, is_restore=False):
         expr = "b (h d) k -> (b h) (d k)"
