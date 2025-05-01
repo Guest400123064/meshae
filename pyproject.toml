@@ -1,7 +1,7 @@
 [project]
-name = "meshpiece"
+name = "meshae"
 version = "0.1.0"
-description = "Efficient mesh tokenization with face encoder."
+description = "Simple mesh auto-encoder for mesh tokenization."
 authors = [
     {name = "guest400123064", email = "wangy49@alumni.upenn.edu"},
     {name = "M4D-SC1ENTIST", email = "xiatao.sun@yale.edu"}
@@ -9,7 +9,7 @@ authors = [
 license = {file = "LICENSE"}
 readme = "README.md"
 packages = [
-    { include = "meshpiece", from = "src" }
+    { include = "meshae", from = "src" }
 ]
 requires-python = ">=3.10"
 dependencies = [
@@ -19,6 +19,7 @@ dependencies = [
     "vector-quantize-pytorch (>=1.22.15,<2.0.0)",
     "beartype (>=0.20.2,<0.21.0)",
     "torchtyping (>=0.1.5,<0.2.0)",
+    "objaverse (>=0.1.7,<0.2.0)",
 ]
 
 [build-system]
@@ -50,4 +51,3 @@ chardet = "^5.2.0"
 pyrender = "^0.1.45"
 opencv-python = "^4.11.0.86"
 pyrr = "^0.10.3"
-
