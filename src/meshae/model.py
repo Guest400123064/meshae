@@ -24,10 +24,10 @@ class MeshAEFeatEmbedConfig:
     ----------
     embedding_dim : int, default=128
         Embedding (of the quantized features) dimension.
-    num_quant_bins : int, default=128
-        Quantization resolution, discretize the ``quant_high_low`` range into
-        ``num_quant_bins`` buckets.
-    quant_high_low : tuple, default=(0.5, -0.5)
+    num_bins : int, default=128
+        Quantization resolution, discretize the ``high_low`` range into
+        ``num_bins`` buckets.
+    high_low : tuple, default=(0.5, -0.5)
         Range of the continuous inputs to be discretized.
 
     References
@@ -36,28 +36,8 @@ class MeshAEFeatEmbedConfig:
             <https://arxiv.org/html/2405.16890v1#S3>`_
     """
     embedding_dim: int = 128
-    num_quant_bins: int = 128
-    quant_high_low: tuple[float, float] = (0.5, -0.5)
-
-
-@dataclass
-class MeshAEModelConfig:
-    r"""Config mesh auto-encoder model.
-
-    Parameters
-    ----------
-    feature_configs : dict[MeshAEFeatNameType, MeshAEFeatEmbedConfig]
-        Configurations for how to quantize and embed features extracted from faces. Please
-        refer to ``MeshAEFeatEmbedConfig`` for more details.
-    """
-    feature_configs: dict[MeshAEFeatNameType, MeshAEFeatEmbedConfig]
-    codebook_size: int = 256,
-    hidden_size: int = 512,
-    num_sageconv_layers: int = 1,
-    num_encoder_layers: int = 12,
-    num_encoder_heads: int = 8,
-    num_quantizers: int = 3,
-    num_codebook_codes: int = 4096,
+    num_bins: int = 128
+    high_low: tuple[float, float] = (0.5, -0.5)
 
 
 class MeshAEEmbedding(nn.Module):
@@ -116,7 +96,7 @@ class MeshAEEmbedding(nn.Module):
         for name, cfg in feature_configs.items():
             self.input_size += cfg.embedding_dim * self.NUM_EXTRACTED_FEATURES[name]
             self.embeddings[name] = nn.Embedding(
-                cfg.num_quant_bins + 1,
+                cfg.num_bins + 1,
                 embedding_dim=cfg.embedding_dim,
                 padding_idx=self.PADDING_IDX,
             )
@@ -231,9 +211,7 @@ class MeshAEEmbedding(nn.Module):
 
         def _quantize(name, feat):
             cfg = self.feature_configs[name]
-            return quantize(
-                feat, high_low=cfg.quant_high_low, num_bins=cfg.num_quant_bins
-            )
+            return quantize(feat, high_low=cfg.high_low, num_bins=cfg.num_bins)
 
         shifts = torch.roll(coords, 1, dims=(2,))
         e1, e2, *_ = (coords - shifts).unbind(2)
@@ -308,13 +286,19 @@ class MeshAEDecoder(nn.Module):
 class MeshAEModel(nn.Module):
     r""""""
 
-    def __init__(self, config: MeshAEModelConfig):
+    def __init__(
+        self,
+        feature_configs: dict[MeshAEFeatNameType, MeshAEFeatEmbedConfig],
+        *,
+        codebook_size: int = 256,
+        hidden_size: int = 512,
+        num_sageconv_layers: int = 1,
+        num_encoder_layers: int = 12,
+        num_encoder_heads: int = 8,
+        num_quantizers: int = 3,
+        num_codebook_codes: int = 4096,    
+    ):
         super().__init__()
-
-        self.config = config
-
-        self.encoder = MeshAEEncoder(config.feature_configs)
-        self.decoder = MeshAEDecoder()
 
     def forward(self,) -> TensorType[(), float]:
         pass
