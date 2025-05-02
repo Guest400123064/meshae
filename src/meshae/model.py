@@ -210,8 +210,15 @@ class MeshAEEmbedding(nn.Module):
         """
 
         def _quantize(name, feat):
+            r"""Handy short cut for quantization.
+
+            Note that we shift the indices by 1 because index 0 is reserved for
+            the padding index based on ``self.PADDING_IDX``.
+            """
             cfg = self.feature_configs[name]
-            return quantize(feat, high_low=cfg.high_low, num_bins=cfg.num_bins)
+            ret = quantize(feat, high_low=cfg.high_low, num_bins=cfg.num_bins)
+
+            return ret + 1
 
         shifts = torch.roll(coords, 1, dims=(2,))
         e1, e2, *_ = (coords - shifts).unbind(2)
