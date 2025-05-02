@@ -131,7 +131,7 @@ class MeshAEEmbedding(nn.Module):
         edges: TensorType["b", "n_edge", 2, int],
         face_masks: TensorType["b", "n_face", bool],
         edge_masks: TensorType["b", "n_edge", bool],
-    ) -> TensorType["b", "n_face", "d_hidden", float]:
+    ) -> TensorType["b", "n_face", -1, float]:
         r"""Create face embeddings from a batch of meshes.
 
         Parameters
@@ -150,13 +150,13 @@ class MeshAEEmbedding(nn.Module):
 
         Returns
         -------
-        TensorType["b", "n_face", "d_hidden", float]
+        TensorType["b", "n_face", -1, float]
             Batch of face embedding sequences with all feature embeddings concatenated and
             passed through initial projection and, if any, ``SAGEConv`` layers.
         """
         coords = vertices[
             torch.arange(vertices.size(0), device=vertices.device)[:, None, None],
-            faces.masked_fill(~face_masks.unsqueeze(-1), 0),
+            faces.masked_fill(~face_masks.unsqueeze(-1), 0),  # Ensures no indexing error
         ]
         embeds = torch.cat(
             [
