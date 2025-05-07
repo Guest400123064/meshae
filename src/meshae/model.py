@@ -6,12 +6,18 @@ from typing import Literal
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange
 from torchtyping import TensorType
 from torch_geometric.nn.conv import SAGEConv
 from vector_quantize_pytorch import ResidualVQ
 from x_transformers import Encoder
 
 from meshae.utils import quantize
+
+b = None
+n_edge = None
+n_face = None
+n_vrtx = None
 
 MeshAEFeatNameType = Literal["area", "norm", "angle", "vertex"]
 
@@ -84,10 +90,11 @@ class MeshAEEmbedding(nn.Module):
 
     def __init__(
         self,
+        *,
         feature_configs: dict[MeshAEFeatNameType, MeshAEFeatEmbedConfig],
         num_sageconv_layers: int = 1,
         hidden_size: int = 512,
-    ):
+    ) -> None:
         super().__init__()
 
         self.input_size = 0
@@ -125,39 +132,33 @@ class MeshAEEmbedding(nn.Module):
 
     def forward(
         self,
-        *,
-        vertices: TensorType["b", "n_vertex", 3, float],
-        faces: TensorType["b", "n_face", 3, int],
-        edges: TensorType["b", "n_edge", 2, int],
+        coords: TensorType["b", "n_face", 3, 3, float],
         face_masks: TensorType["b", "n_face", bool],
+        edges: TensorType["b", "n_edge", 2, int],
         edge_masks: TensorType["b", "n_edge", bool],
     ) -> TensorType["b", "n_face", -1, float]:
         r"""Create face embeddings from a batch of meshes.
 
         Parameters
         ----------
-        vertices : TensorType["b", "n_vertex", 3, float]
-            Batch of mesh vertex sets with each vertex represented by x-y-z coordinates.
-        faces : TensorType["b", "n_face", 3, int]
-            Batch of mesh face sequences with each face represented by three vertex IDs.
+        coords : TensorType["b", "n_face", 3, 3, float]
+            Batch of trimesh faces with each face represented as the 3 x-y-z
+            coordinates of 3 vertices.
+        face_masks : TensorType["b", "n_face", bool]
+            Boolean masks used to separate actual faces from paddings. Actual faces have
+            corresponding face mask values being 1.
         edges : TensorType["b", "n_edge", 2, int]
             Batch of **face** edges used to identify the topological structure between
             faces. This is only used in ``SAGEConv`` layers.
-        face_masks : TensorType["b", "n_face", bool]
-            Boolean masks used to separate actual faces from paddings.
         edge_masks : TensorType["b", "n_edge", bool]
             Boolean masks used to separate actual faces from paddings.
 
         Returns
         -------
-        TensorType["b", "n_face", -1, float]
+        embeds : TensorType["b", "n_face", -1, float]
             Batch of face embedding sequences with all feature embeddings concatenated and
             passed through initial projection and, if any, ``SAGEConv`` layers.
         """
-        coords = vertices[
-            torch.arange(vertices.size(0), device=vertices.device)[:, None, None],
-            faces.masked_fill(~face_masks.unsqueeze(-1), 0),  # Ensures no indexing error
-        ]
         embeds = torch.cat(
             [
                 self.embeddings[name](indices) for name, indices in
@@ -165,15 +166,14 @@ class MeshAEEmbedding(nn.Module):
             ],
             dim=-1,
         )
-
         embeds = self.proj_in(embeds)
-        if self.sageconv_in is not None:
 
-            # In PyG implementation of the SAGEConv operator, a batch of graphs are treated
-            # as a single disjoint graph. Nodes from different batches will be flattened to
-            # a 2D tensor, i.e., a single list of node embeddings, where padding nodes will
-            # be removed. Thus, the edge indices has to be shifted accordingly based on the
-            # number of nodes (number of faces) in each graph from that batch.
+        # In PyG implementation of the SAGEConv operator, a batch of graphs are treated
+        # as a single disjoint graph. Nodes from different batches will be flattened to
+        # a 2D tensor, i.e., a single list of node embeddings, where padding nodes will
+        # be removed. Thus, the edge indices has to be shifted accordingly based on the
+        # number of nodes (number of faces) in each graph from that batch.
+        if self.sageconv_in is not None:
             B, T, _ = embeds.size()
 
             offsets = F.pad(face_masks.long().sum(-1).cumsum(0), (1, -1), value=0)
@@ -204,7 +204,7 @@ class MeshAEEmbedding(nn.Module):
 
         Returns
         -------
-        dict[MeshAEFeatNameType, TensorType["b", "n_face", -1, int]]
+        feats : dict[MeshAEFeatNameType, TensorType["b", "n_face", -1, int]]
             A dictionary mapping from feature names to batches of extracted and
             quantized feature indices.
         """
@@ -240,7 +240,125 @@ class MeshAEEmbedding(nn.Module):
 
 
 class MeshAEEncoder(nn.Module):
-    r""""""
+    r"""
+
+    
+    Parameters
+    ----------
+    codebook_size : int, default=256
+        Codebook code (latent) dimension.
+    hidden_size : int, default=512
+        Hidden state dimension.
+    num_sageconv_layers : int, default=1
+        Number of ``SAGEConv`` layers to capture face topological structures before sending
+        the face embeddings to VQ-VAE encoder.
+    num_quantizers : int, default=2
+        The number of codebook embeddings used to approximate the input embedding. If
+        set to 1, the RQ-VAE reduces to the regular VQ-VAE. 
+    """
+
+    def __init__(
+        self,
+        *,
+        codebook_size: int = 256,
+        hidden_size: int = 512,
+        num_encoder_layers: int = 6,
+        num_encoder_heads: int = 8,
+        num_quantizers: int = 2,
+        num_codebook_codes: int = 4096,
+    ) -> None:
+        super().__init__()
+
+        self.hidden_size = hidden_size
+        self.num_encoder_layers = num_encoder_layers
+        self.num_encoder_heads = num_encoder_heads
+        self.encoder = Encoder(
+            dim=hidden_size,
+            depth=num_encoder_layers,
+            heads=num_encoder_heads,
+        )
+
+        self.num_quantizers = num_quantizers
+        self.num_codebook_codes = num_codebook_codes
+        self.codebook_size = codebook_size
+        self.proj_vrtx = nn.Linear(hidden_size, codebook_size * 3)
+        self.quantizer = ResidualVQ(
+            dim=codebook_size,
+            num_quantizers=num_quantizers,
+            codebook_size=num_codebook_codes,
+            codebook_dim=codebook_size,
+            shared_codebook=True,
+            rotation_trick=True,
+        )
+
+    def forward(
+        self,
+        faces: TensorType["b", "n_face", 3, int],
+        face_embeds: TensorType["b", "n_face", -1, float],
+        face_masks: TensorType["b", "n_face", bool],
+    ) -> tuple[
+        TensorType["b", float],
+        TensorType["b", int],
+        TensorType[(), float],
+    ]:
+        r"""Create face embeddings from a batch of meshes.
+
+        To facilitate the decoding process, the PivotMesh paper mentioned an operation
+        introduced in the MeshGPT paper to ensure consistent embeddings between shared
+        vertices. Specifically, face embeddings are projected to vertex embeddings and
+        the embeddings for shared vertices (from different faces) are substituted with
+        the average pooling embeddings.
+
+        Parameters
+        ----------
+        faces : TensorType["b", "n_face", 3, int]
+            Batch of mesh face sequences with each face represented by three vertex ids.
+        face_embeds : TensorType["b", "n_face", -1, int]
+            Batch of mesh face embedding sequences. The embedding size should be equal
+            to ``self.hidden_size``.
+        face_masks : TensorType["b", "n_face", bool]
+            Boolean masks used to separate actual faces from paddings. Actual faces have
+            corresponding face mask values being 1.
+
+        Returns
+        -------
+        latents : TensorType["b", float]
+            TBD
+        codes : TensorType["b", int]
+            TBD
+        commit_loss : TensorType[(), float]
+            The commit loss used to update the VQ-VAE codebook codes.
+        """
+        face_embeds = self.encoder(face_embeds, mask=face_masks)
+        face_embeds = rearrange(self.proj_vrtx(face_embeds), "b t (v d) -> b (t v) d", v=3)
+
+        B, _, E, N = *face_embeds.size(), faces.amax().int().item() + 1
+        vrtx_embeds = torch.empty(
+            (B, N + 1, E),  # Adding one extra dummy vertex embedding for padding only
+            device=face_embeds.device,
+            dtype=face_embeds.dtype,
+        )
+
+
+        torch.scatter_reduce
+
+        latents, codes, commit_loss = self.quantizer(
+            vrtx_embeds,
+            mask=face_masks,
+            return_all_codes=False,
+        )
+
+
+class MeshAEDecoder(nn.Module):
+    pass
+
+
+class MeshAEModel(nn.Module):
+    r"""
+
+    Parameters
+    ----------
+    """
 
     def __init__(
         self,
@@ -253,62 +371,70 @@ class MeshAEEncoder(nn.Module):
         num_encoder_heads: int = 8,
         num_quantizers: int = 3,
         num_codebook_codes: int = 4096,
-    ):
+        num_decoder_layers: int = 12,
+        num_decoder_heads: int = 8,    
+    ) -> None:
         super().__init__()
 
         self.feature_configs = feature_configs
-        self.num_sageconv_layers = num_sageconv_layers
         self.hidden_size = hidden_size
+        self.num_sageconv_layers = num_sageconv_layers
         self.embedding = MeshAEEmbedding(
-            feature_configs, num_sageconv_layers, hidden_size,
+            feature_configs=feature_configs,
+            num_sageconv_layers=num_sageconv_layers,
+            hidden_size=hidden_size,
         )
 
+        self.codebook_size = codebook_size
         self.num_encoder_layers = num_encoder_layers
         self.num_encoder_heads = num_encoder_heads
-        self.encoder = Encoder(
-            dim=hidden_size,
-            depth=num_encoder_layers,
-            heads=num_encoder_heads,
-        )
-
         self.num_quantizers = num_quantizers
         self.num_codebook_codes = num_codebook_codes
-        self.codebook_size = codebook_size
-        self.quantizer = ResidualVQ(
-            dim=hidden_size,
+        self.encoder = MeshAEEncoder(
+            codebook_size=codebook_size,
+            num_encoder_layers=num_encoder_layers,
+            num_encoder_heads=num_encoder_heads,
             num_quantizers=num_quantizers,
-            codebook_size=num_codebook_codes,
-            codebook_dim=codebook_size,
-            shared_codebook=True,
+            num_codebook_codes=num_codebook_codes,
         )
 
-    def forward(self,):
-        pass
+        self.num_decoder_layers = num_decoder_layers
+        self.num_decoder_heads = num_decoder_heads
+        self.decoder = MeshAEDecoder()
 
-
-class MeshAEDecoder(nn.Module):
-    pass
-
-
-class MeshAEModel(nn.Module):
-    r""""""
-
-    def __init__(
+    def forward(
         self,
-        feature_configs: dict[MeshAEFeatNameType, MeshAEFeatEmbedConfig],
         *,
-        codebook_size: int = 256,
-        hidden_size: int = 512,
-        num_sageconv_layers: int = 1,
-        num_encoder_layers: int = 12,
-        num_encoder_heads: int = 8,
-        num_quantizers: int = 3,
-        num_codebook_codes: int = 4096,    
-    ):
-        super().__init__()
+        vertices: TensorType["b", "n_vrtx", 3, float],
+        faces: TensorType["b", "n_face", 3, int],
+        edges: TensorType["b", "n_edge", 2, int],
+        face_masks: TensorType["b", "n_face", bool],
+        edge_masks: TensorType["b", "n_edge", bool],
+    ) -> TensorType[(), float]:
+        r"""
 
-    def forward(self,) -> TensorType[(), float]:
-        pass
+        Parameters
+        ----------
+        vertices : TensorType["b", "n_vrtx", 3, float]
+            Batch of mesh vertex sets with each vertex represented by x-y-z coordinates.
+        faces : TensorType["b", "n_face", 3, int]
+            Batch of mesh face sequences with each face represented by three vertex ids.
+        edges : TensorType["b", "n_edge", 2, int]
+            Batch of **face** edges used to identify the topological structure between
+            faces. This is only used in ``SAGEConv`` layers.
+        face_masks : TensorType["b", "n_face", bool]
+            Boolean masks used to separate actual faces from paddings. Actual faces have
+            corresponding face mask values being 1.
+        edge_masks : TensorType["b", "n_edge", bool]
+            Boolean masks used to separate actual faces from paddings.
+        """
+        coords = vertices[
+            torch.arange(vertices.size(0), device=vertices.device)[:, None, None],
+            faces.masked_fill(~face_masks.unsqueeze(-1), 0),  # Ensures no indexing error
+        ]
+        face_embeds = self.embedding(coords, face_masks, edges, edge_masks)
+
+        self.encoder(face_embeds, )
 
     @torch.no_grad
     def encode(self,):
