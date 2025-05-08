@@ -594,11 +594,8 @@ class MeshAEModel(nn.Module):
             Reconstruction loss.
         """
         config = self.feature_configs["vertex"]
-
+        coords = quantize(coords, high_low=config.high_low, num_bins=config.num_bins)
         logits = logits.log_softmax(-1)
-        coords = quantize(
-            coords.flatten(-2), high_low=config.high_low, num_bins=config.num_bins,
-        )
 
         return 0
 
