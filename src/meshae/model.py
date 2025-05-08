@@ -8,8 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
-from torchtyping import TensorType
 from torch_geometric.nn.conv import SAGEConv
+from torchtyping import TensorType
 from vector_quantize_pytorch import ResidualVQ
 from x_transformers import Encoder
 
