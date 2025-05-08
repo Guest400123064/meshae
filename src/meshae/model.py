@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
+from einops.layers.torch import Rearrange
 from torchtyping import TensorType
 from torch_geometric.nn.conv import SAGEConv
 from vector_quantize_pytorch import ResidualVQ
@@ -270,6 +271,7 @@ class MeshAEEncoder(nn.Module):
             dim=hidden_size,
             depth=num_encoder_layers,
             heads=num_encoder_heads,
+            pre_norm=True,
         )
 
         self.num_quantizers = num_quantizers
@@ -294,8 +296,8 @@ class MeshAEEncoder(nn.Module):
         face_embeds: TensorType["b", "n_face", -1, float],
         face_masks: TensorType["b", "n_face", bool],
     ) -> tuple[
-        TensorType["b", float],
-        TensorType["b", int],
+        TensorType["b", "n_face", -1, float],
+        TensorType["b", "n_face", -1, int],
         TensorType[(), float],
     ]:
         r"""Create face embeddings from a batch of meshes.
@@ -319,7 +321,7 @@ class MeshAEEncoder(nn.Module):
 
         Returns
         -------
-        face_latents : TensorType["b", "n_face", -1, float]
+        face_embeds : TensorType["b", "n_face", -1, float]
             Batch of face embedding sequences created from quantized vertex latents.
         face_codes : TensorType["b", "n_face", -1, int]
             Batch of face codebook code sequences. The number of code depends on the
@@ -375,7 +377,7 @@ class MeshAEEncoder(nn.Module):
             ),
             return_all_codes=False,
         )
-        face_latents = self.proj_latent(
+        face_embeds = self.proj_latent(
             face_embeds.new_empty((B, T, D))
             .masked_scatter(
                 face_masks.unsqueeze(-1),
@@ -389,11 +391,83 @@ class MeshAEEncoder(nn.Module):
                 rearrange(vrtx_codes[indices], "(t v) q -> t (v q)", v=3),
             )
         )
-        return face_latents, face_codes, commit_loss.sum()
+        return face_embeds, face_codes, commit_loss.sum()
 
 
 class MeshAEDecoder(nn.Module):
-    pass
+    r"""
+
+    Parameters
+    ----------
+    """
+
+    def __init__(
+        self,
+        *,
+        hidden_size: int = 512,
+        num_decoder_layers: int = 6,
+        num_decoder_heads: int = 8,
+        num_refiner_layers: int = 6,
+        num_refiner_heads: int = 8,
+        coord_num_bins: int = 128,
+    ):
+        super().__init__()
+
+        self.num_decoder_layers = num_decoder_layers
+        self.num_decoder_heads = num_decoder_heads
+        self.decoder = Encoder(
+            dim=hidden_size,
+            depth=num_decoder_layers,
+            heads=num_decoder_heads,
+            pre_norm=True,
+        )
+
+        self.num_refiner_layers = num_refiner_layers
+        self.num_refiner_heads = num_refiner_heads
+        self.proj_refine = nn.Sequential(
+            nn.Linear(hidden_size, 3 * hidden_size),
+            Rearrange("b t (v d) -> b (t v) d", v=3, d=hidden_size),
+        )
+        self.refiner = Encoder(
+            dim=hidden_size,
+            depth=num_refiner_layers,
+            heads=num_refiner_heads,
+            pre_norm=True,
+        )
+
+        self.coord_num_bins = coord_num_bins
+        self.proj_logit = nn.Sequential(
+            nn.Linear(hidden_size, 3 * coord_num_bins),
+            Rearrange("b (t v) (c q) -> b t (v c) q", v=3, c=3, q=coord_num_bins),
+        )
+
+    def forward(
+        self,
+        face_embeds: TensorType["b", "n_face", -1, float],
+        face_masks: TensorType["b", "n_face", bool],
+    ) -> TensorType["b", "n_face", 9, -1, float]:
+        r"""Decode from quantized face embeddings into vertex logits.
+
+        Parameters
+        ----------
+        face_embeds : TensorType["b", "n_face", -1, float]
+            Batch of face embedding sequences created from quantized vertex latents.
+        face_masks : TensorType["b", "n_face", bool]
+            Boolean masks used to separate actual faces from paddings. Actual faces have
+            corresponding face mask values being 1.
+
+        Returns
+        -------
+        logits : TensorType["b", "n_face", 9, -1, float]
+            Predicted face vertex logits.
+        """
+        face_embeds = self.decoder(face_embeds, mask=face_masks)
+        face_embeds = self.proj_refine(face_embeds)
+        face_embeds = self.refiner(
+            face_embeds,
+            mask=repeat(face_masks, "b t -> b (t v)", v=3),
+        )
+        return self.proj_logit(face_embeds)
 
 
 class MeshAEModel(nn.Module):
@@ -415,7 +489,11 @@ class MeshAEModel(nn.Module):
         num_quantizers: int = 3,
         num_codebook_codes: int = 4096,
         num_decoder_layers: int = 12,
-        num_decoder_heads: int = 8,    
+        num_decoder_heads: int = 8,
+        num_refiner_layers: int = 6,
+        num_refiner_heads: int = 8,
+        coord_num_bins: int = 128,
+        commitment_weight: float = 1.0,
     ) -> None:
         super().__init__()
 
@@ -433,17 +511,30 @@ class MeshAEModel(nn.Module):
         self.num_encoder_heads = num_encoder_heads
         self.num_quantizers = num_quantizers
         self.num_codebook_codes = num_codebook_codes
+        self.commitment_weight = commitment_weight
         self.encoder = MeshAEEncoder(
             codebook_size=codebook_size,
+            hidden_size=hidden_size,
             num_encoder_layers=num_encoder_layers,
             num_encoder_heads=num_encoder_heads,
             num_quantizers=num_quantizers,
             num_codebook_codes=num_codebook_codes,
+            commitment_weight=commitment_weight,
         )
 
         self.num_decoder_layers = num_decoder_layers
         self.num_decoder_heads = num_decoder_heads
-        self.decoder = MeshAEDecoder()
+        self.num_refiner_layers = num_refiner_layers
+        self.num_refiner_heads = num_refiner_heads
+        self.coord_num_bins = coord_num_bins
+        self.decoder = MeshAEDecoder(
+            hidden_size=hidden_size,
+            num_decoder_layers=num_decoder_layers,
+            num_decoder_heads=num_decoder_heads,
+            num_refiner_layers=num_refiner_layers,
+            num_refiner_heads=num_refiner_heads,
+            coord_num_bins=coord_num_bins,
+        )
 
     def forward(
         self,
@@ -471,13 +562,17 @@ class MeshAEModel(nn.Module):
         edge_masks : TensorType["b", "n_edge", bool]
             Boolean masks used to separate actual faces from paddings.
         """
-        coords = vertices[
-            torch.arange(vertices.size(0), device=vertices.device)[:, None, None],
-            faces.masked_fill(~face_masks.unsqueeze(-1), 0),  # Ensures no indexing error
-        ]
-        face_embeds = self.embedding(coords, face_masks, edges, edge_masks)
+        faces = faces.masked_fill(~face_masks.unsqueeze(-1), 0)
+        batches = torch.arange(vertices.size(0), device=vertices.device)
 
-        self.encoder(face_embeds, )
+        coords = vertices[batches[:, None, None], faces]        
+        face_embeds = self.embedding(coords, face_masks, edges, edge_masks)
+        face_embeds, _, commit_loss = self.encoder(faces, face_embeds, face_masks)
+
+        logits = self.decoder(face_embeds, face_masks)
+
+
+        return logits, commit_loss
 
     @torch.no_grad
     def encode(self,):
