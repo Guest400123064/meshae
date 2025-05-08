@@ -6,7 +6,7 @@ from typing import Literal
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
+from einops import rearrange, repeat
 from torchtyping import TensorType
 from torch_geometric.nn.conv import SAGEConv
 from vector_quantize_pytorch import ResidualVQ
@@ -85,7 +85,6 @@ class MeshAEEmbedding(nn.Module):
             <https://github.com/lucidrains/meshgpt-pytorch/blob/672d921d733ea5f05f5d0724efbbf2ab88440981/meshgpt_pytorch/meshgpt_pytorch.py#L157>`_
     """
 
-    PADDING_IDX = 0
     NUM_EXTRACTED_FEATURES = {"vertex": 9, "angle": 3, "norm": 3, "area": 1}
 
     def __init__(
@@ -103,9 +102,7 @@ class MeshAEEmbedding(nn.Module):
         for name, cfg in feature_configs.items():
             self.input_size += cfg.embedding_dim * self.NUM_EXTRACTED_FEATURES[name]
             self.embeddings[name] = nn.Embedding(
-                cfg.num_bins + 1,
-                embedding_dim=cfg.embedding_dim,
-                padding_idx=self.PADDING_IDX,
+                cfg.num_bins + 1, embedding_dim=cfg.embedding_dim,
             )
 
         self.hidden_size = hidden_size
@@ -185,7 +182,7 @@ class MeshAEEmbedding(nn.Module):
                 embeds = conv(embeds, edges)
 
             embeds = (
-                embeds.new_zeros((B, T, embeds.size(-1)))
+                embeds.new_empty((B, T, embeds.size(-1)))
                 .masked_scatter(face_masks.unsqueeze(-1), embeds)
             )
 
@@ -210,15 +207,8 @@ class MeshAEEmbedding(nn.Module):
         """
 
         def _quantize(name, feat):
-            r"""Handy short cut for quantization.
-
-            Note that we shift the indices by 1 because index 0 is reserved for
-            the padding index based on ``self.PADDING_IDX``.
-            """
             cfg = self.feature_configs[name]
-            ret = quantize(feat, high_low=cfg.high_low, num_bins=cfg.num_bins)
-
-            return ret + 1
+            return quantize(feat, high_low=cfg.high_low, num_bins=cfg.num_bins)
 
         shifts = torch.roll(coords, 1, dims=(2,))
         e1, e2, *_ = (coords - shifts).unbind(2)
@@ -240,9 +230,8 @@ class MeshAEEmbedding(nn.Module):
 
 
 class MeshAEEncoder(nn.Module):
-    r"""
+    r"""Compute latents and corresponding face codes for input mesh.
 
-    
     Parameters
     ----------
     codebook_size : int, default=256
@@ -255,6 +244,10 @@ class MeshAEEncoder(nn.Module):
     num_quantizers : int, default=2
         The number of codebook embeddings used to approximate the input embedding. If
         set to 1, the RQ-VAE reduces to the regular VQ-VAE. 
+    num_codebook_codes : int, default=4096
+        Number of unique codebook codes.
+    commitment_weight : float, default=1.0
+        The weighting parameter for the VQ-VAE commitment loss term.
     """
 
     def __init__(
@@ -266,6 +259,7 @@ class MeshAEEncoder(nn.Module):
         num_encoder_heads: int = 8,
         num_quantizers: int = 2,
         num_codebook_codes: int = 4096,
+        commitment_weight: float = 1.0,
     ) -> None:
         super().__init__()
 
@@ -281,7 +275,9 @@ class MeshAEEncoder(nn.Module):
         self.num_quantizers = num_quantizers
         self.num_codebook_codes = num_codebook_codes
         self.codebook_size = codebook_size
-        self.proj_vrtx = nn.Linear(hidden_size, codebook_size * 3)
+        self.commitment_weight = commitment_weight
+        self.proj_vertex = nn.Linear(hidden_size, codebook_size * 3)
+        self.proj_latent = nn.Linear(codebook_size * 3, hidden_size)
         self.quantizer = ResidualVQ(
             dim=codebook_size,
             num_quantizers=num_quantizers,
@@ -289,6 +285,7 @@ class MeshAEEncoder(nn.Module):
             codebook_dim=codebook_size,
             shared_codebook=True,
             rotation_trick=True,
+            commitment_weight=commitment_weight,
         )
 
     def forward(
@@ -303,17 +300,17 @@ class MeshAEEncoder(nn.Module):
     ]:
         r"""Create face embeddings from a batch of meshes.
 
-        To facilitate the decoding process, the PivotMesh paper mentioned an operation
-        introduced in the MeshGPT paper to ensure consistent embeddings between shared
-        vertices. Specifically, face embeddings are projected to vertex embeddings and
-        the embeddings for shared vertices (from different faces) are substituted with
-        the average pooling embeddings.
+        To facilitate the decoding process, the PivotMesh paper [1]_ mentioned an operation
+        introduced in the MeshGPT paper [2]_ to ensure consistent embeddings between shared
+        vertices. Specifically, face embeddings are projected to vertex embeddings and then
+        embeddings for shared vertices (from different faces) are substituted with average-
+        pooling embeddings.
 
         Parameters
         ----------
         faces : TensorType["b", "n_face", 3, int]
             Batch of mesh face sequences with each face represented by three vertex ids.
-        face_embeds : TensorType["b", "n_face", -1, int]
+        face_embeds : TensorType["b", "n_face", -1, float]
             Batch of mesh face embedding sequences. The embedding size should be equal
             to ``self.hidden_size``.
         face_masks : TensorType["b", "n_face", bool]
@@ -322,31 +319,74 @@ class MeshAEEncoder(nn.Module):
 
         Returns
         -------
-        latents : TensorType["b", float]
+        face_latents : TensorType["b", "n_face", -1, float]
             TBD
-        codes : TensorType["b", int]
+        face_codes : TensorType["b", "n_face", -1, int]
             TBD
         commit_loss : TensorType[(), float]
             The commit loss used to update the VQ-VAE codebook codes.
+
+        References
+        ----------
+        .. [1] `"PivotMesh: Generic 3D Mesh Generation via Pivot Vertices Guidance", Wang et al.
+            <https://arxiv.org/html/2405.16890v1#S3>`_
+        .. [2] `"MeshGPT: Generating Triangle Meshes with Decoder-Only Transformers", Siddiqui et al.
+                <https://arxiv.org/abs/2311.15475>`_
         """
         face_embeds = self.encoder(face_embeds, mask=face_masks)
-        face_embeds = rearrange(self.proj_vrtx(face_embeds), "b t (v d) -> b (t v) d", v=3)
+        face_embeds = self.proj_vertex(face_embeds)
 
-        B, _, E, N = *face_embeds.size(), faces.amax().int().item() + 1
-        vrtx_embeds = torch.empty(
-            (B, N + 1, E),  # Adding one extra dummy vertex embedding for padding only
-            device=face_embeds.device,
-            dtype=face_embeds.dtype,
-        )
+        B, T, D = face_embeds.size()
 
+        # To achieve the vertex embedding aggregation operation we first create a vertex embedding
+        # memory bank of size N x E, where N is number of unique, non-padding vertex ids of meshes
+        # within the batch, and E is the vertex embedding dim. In this implementation, E should be
+        # equal to the codebook code dim.
+        #
+        # Then, based on the number of unique ids if each individual mesh, we compute an offset to
+        # reindex the vertices from different mesh objects to avoid overlap. In turn, the batch of
+        # faces can be flattened into a single sequence and drop paddings. Lastly we use scattered
+        # reduce to perform the average pooling operation.
+        #
+        # Essentially, it is the vertex embeddings going through the quantizer not those of faces.
+        vrtx_counts = faces.flatten(-2).amax(-1).cumsum(0).int() + 1
+        vrtx_embeds = face_embeds.new_empty((vrtx_counts.max().item(), D // 3))
 
-        torch.scatter_reduce
+        offsets = F.pad(vrtx_counts, (1, -1), value=0)
+        indices = (faces + offsets[:, None, None])[face_masks].flatten()
 
-        latents, codes, commit_loss = self.quantizer(
-            vrtx_embeds,
-            mask=face_masks,
+        # A few sanity checks to verify `indices` validity
+        assert indices.max().item() + 1 == vrtx_embeds.size(-1)
+        assert indices.size(-1) == face_masks.sum().item()
+        if B > 1:
+            num_face_first_mesh = face_masks[0].sum().int().item()
+            num_vrtx_first_mesh = vrtx_counts[0].item()
+            assert indices[num_face_first_mesh * 3:].min().item() == num_vrtx_first_mesh
+
+        vrtx_embeds, vrtx_codes, commit_loss = self.quantizer(
+            vrtx_embeds.scatter_reduce_(
+                0, indices.unsqueeze(-1).expand(-1, D // 3),
+                src=rearrange(face_embeds[face_masks], "t (v e) -> (t v) e", v=3),
+                reduce="mean",
+                include_self=False,
+            ),
             return_all_codes=False,
         )
+        face_latents = self.proj_latent(
+            face_embeds.new_empty((B, T, D))
+            .masked_scatter(
+                ~face_masks.unsqueeze(-1),
+                rearrange(vrtx_embeds[indices], "(t v) e -> t (v e)", v=3),
+            ),
+        )
+        face_codes = (
+            faces.new_empty((B, T, self.num_quantizers * 3))
+            .masked_scatter(
+                ~face_masks.unsqueeze(-1),
+                rearrange(vrtx_codes[indices], "(t v) q -> t (v q)", v=3),
+            )
+        )
+        return face_latents, face_codes, commit_loss.sum()
 
 
 class MeshAEDecoder(nn.Module):
