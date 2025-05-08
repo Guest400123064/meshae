@@ -375,14 +375,14 @@ class MeshAEEncoder(nn.Module):
         face_latents = self.proj_latent(
             face_embeds.new_empty((B, T, D))
             .masked_scatter(
-                ~face_masks.unsqueeze(-1),
+                face_masks.unsqueeze(-1),
                 rearrange(vrtx_embeds[indices], "(t v) e -> t (v e)", v=3),
             ),
         )
         face_codes = (
             faces.new_empty((B, T, self.num_quantizers * 3))
             .masked_scatter(
-                ~face_masks.unsqueeze(-1),
+                face_masks.unsqueeze(-1),
                 rearrange(vrtx_codes[indices], "(t v) q -> t (v q)", v=3),
             )
         )
