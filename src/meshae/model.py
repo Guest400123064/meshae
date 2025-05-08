@@ -103,7 +103,7 @@ class MeshAEEmbedding(nn.Module):
         for name, cfg in feature_configs.items():
             self.input_size += cfg.embedding_dim * self.NUM_EXTRACTED_FEATURES[name]
             self.embeddings[name] = nn.Embedding(
-                cfg.num_bins + 1, embedding_dim=cfg.embedding_dim,
+                cfg.num_bins, embedding_dim=cfg.embedding_dim,
             )
 
         self.hidden_size = hidden_size
@@ -287,6 +287,8 @@ class MeshAEEncoder(nn.Module):
             codebook_dim=codebook_size,
             shared_codebook=True,
             rotation_trick=True,
+            stochastic_sample_codes=True,
+            sample_codebook_temp=0.1,
             commitment_weight=commitment_weight,
         )
 
@@ -486,13 +488,12 @@ class MeshAEModel(nn.Module):
         num_sageconv_layers: int = 1,
         num_encoder_layers: int = 12,
         num_encoder_heads: int = 8,
-        num_quantizers: int = 3,
+        num_quantizers: int = 2,
         num_codebook_codes: int = 4096,
         num_decoder_layers: int = 12,
         num_decoder_heads: int = 8,
         num_refiner_layers: int = 6,
         num_refiner_heads: int = 8,
-        coord_num_bins: int = 128,
         commitment_weight: float = 1.0,
     ) -> None:
         super().__init__()
@@ -526,14 +527,13 @@ class MeshAEModel(nn.Module):
         self.num_decoder_heads = num_decoder_heads
         self.num_refiner_layers = num_refiner_layers
         self.num_refiner_heads = num_refiner_heads
-        self.coord_num_bins = coord_num_bins
         self.decoder = MeshAEDecoder(
             hidden_size=hidden_size,
             num_decoder_layers=num_decoder_layers,
             num_decoder_heads=num_decoder_heads,
             num_refiner_layers=num_refiner_layers,
             num_refiner_heads=num_refiner_heads,
-            coord_num_bins=coord_num_bins,
+            coord_num_bins=feature_configs["vertex"].num_bins,
         )
 
     def forward(
@@ -563,16 +563,28 @@ class MeshAEModel(nn.Module):
             Boolean masks used to separate actual faces from paddings.
         """
         faces = faces.masked_fill(~face_masks.unsqueeze(-1), 0)
-        batches = torch.arange(vertices.size(0), device=vertices.device)
+        index = torch.arange(vertices.size(0), device=vertices.device)[:, None, None]
 
-        coords = vertices[batches[:, None, None], faces]        
+        coords = vertices[index, faces]
         face_embeds = self.embedding(coords, face_masks, edges, edge_masks)
         face_embeds, _, commit_loss = self.encoder(faces, face_embeds, face_masks)
-
         logits = self.decoder(face_embeds, face_masks)
 
+        recon_loss = self.compute_recon_loss(coords, logits)
+        return coords, logits, recon_loss, commit_loss
 
-        return logits, commit_loss
+    def compute_recon_loss(self, coords, logits):
+        r"""
+
+        Parameters
+        ----------
+        """
+        config = self.feature_configs["vertex"]
+        coords = quantize(
+            coords.flatten(-2), high_low=config.high_low, num_bins=config.num_bins,
+        )
+
+        return 0
 
     @torch.no_grad
     def encode(self,):
