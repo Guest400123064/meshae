@@ -349,6 +349,8 @@ class MeshAEEncoder(nn.Module):
         # reduce to perform the average pooling operation.
         #
         # Essentially, it is the vertex embeddings going through the quantizer not those of faces.
+        #
+        # NOTE: Padding indices should be negative.
         vrtx_counts = faces.flatten(-2).amax(-1).cumsum(0).int() + 1
         vrtx_embeds = face_embeds.new_empty((vrtx_counts.max().item(), D // 3))
 
