@@ -362,7 +362,8 @@ class MeshAEEncoder(nn.Module):
         #
         # Essentially, it is the vertex embeddings going through the quantizer not those of faces.
         #
-        # NOTE: Padding indices should be negative.
+        # NOTE: Padding index should be NOT exceed the maximum number of vertices in each mesh. It
+        # could be 0 since we will mask out the paddings anyway.
         vrtx_counts = faces.flatten(-2).amax(-1).cumsum(0).int() + 1
         vrtx_embeds = face_embeds.new_empty((vrtx_counts.max().item(), D // 3))
 
