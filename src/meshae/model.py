@@ -320,9 +320,10 @@ class MeshAEEncoder(nn.Module):
         Returns
         -------
         face_latents : TensorType["b", "n_face", -1, float]
-            TBD
+            Batch of face embedding sequences created from quantized vertex latents.
         face_codes : TensorType["b", "n_face", -1, int]
-            TBD
+            Batch of face codebook code sequences. The number of code depends on the
+            number of quantizers in the RQ-VAE.
         commit_loss : TensorType[(), float]
             The commit loss used to update the VQ-VAE codebook codes.
 
