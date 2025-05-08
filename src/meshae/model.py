@@ -566,20 +566,36 @@ class MeshAEModel(nn.Module):
         index = torch.arange(vertices.size(0), device=vertices.device)[:, None, None]
 
         coords = vertices[index, faces]
-        face_embeds = self.embedding(coords, face_masks, edges, edge_masks)
-        face_embeds, _, commit_loss = self.encoder(faces, face_embeds, face_masks)
-        logits = self.decoder(face_embeds, face_masks)
+        embeds = self.embedding(coords, face_masks, edges, edge_masks)
+        embeds, _, commit_loss = self.encoder(faces, embeds, face_masks)
+        logits = self.decoder(embeds, face_masks)
 
-        recon_loss = self.compute_recon_loss(coords, logits)
+        recon_loss = self.compute_recon_loss(coords.flatten(-2), logits)
         return coords, logits, recon_loss, commit_loss
 
-    def compute_recon_loss(self, coords, logits):
-        r"""
+    def compute_recon_loss(
+        self,
+        coords: TensorType["b", "n_face", 9, float],
+        logits: TensorType["b", "n_face", 9, -1, float],
+    ) -> TensorType[(), float]:
+        r"""Compute reconstruction loss.
 
         Parameters
         ----------
+        coords : TensorType["b", "n_face", 9, float]
+            Raw face coordinates without quantization, having the vertex and coordinate
+            dimensions flattened. 
+        logits : TensorType["b", "n_face", 9, -1, float]
+            Predicted logits from decoder.
+
+        Returns
+        -------
+        recon_loss : TensorType[(), float]
+            Reconstruction loss.
         """
         config = self.feature_configs["vertex"]
+
+        logits = logits.log_softmax(-1)
         coords = quantize(
             coords.flatten(-2), high_low=config.high_low, num_bins=config.num_bins,
         )
