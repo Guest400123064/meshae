@@ -42,6 +42,7 @@ class MeshAEFeatEmbedConfig:
     .. [1] `"PivotMesh: Generic 3D Mesh Generation via Pivot Vertices Guidance", Wang et al.
             <https://arxiv.org/html/2405.16890v1#S3>`_
     """
+
     embedding_dim: int = 128
     num_bins: int = 128
     high_low: tuple[float, float] = (0.5, -0.5)
@@ -103,7 +104,8 @@ class MeshAEEmbedding(nn.Module):
         for name, cfg in feature_configs.items():
             self.input_size += cfg.embedding_dim * self.NUM_EXTRACTED_FEATURES[name]
             self.embeddings[name] = nn.Embedding(
-                cfg.num_bins, embedding_dim=cfg.embedding_dim,
+                cfg.num_bins,
+                embedding_dim=cfg.embedding_dim,
             )
 
         self.hidden_size = hidden_size
@@ -118,14 +120,18 @@ class MeshAEEmbedding(nn.Module):
         self.sageconv_params = {"normalize": True, "project": True}
         self.num_sageconv_layers = num_sageconv_layers
         if num_sageconv_layers > 0:
-            self.sageconv_in = SAGEConv(hidden_size, hidden_size, **self.sageconv_params)
+            self.sageconv_in = SAGEConv(
+                hidden_size, hidden_size, **self.sageconv_params
+            )
             self.sageconv_activate = nn.Sequential(
                 nn.GELU(),
                 nn.LayerNorm(hidden_size),
             )
             self.sageconv_hidden = nn.ModuleList([])
             for _ in range(num_sageconv_layers - 1):
-                sageconv_layer = SAGEConv(hidden_size, hidden_size, **self.sageconv_params)
+                sageconv_layer = SAGEConv(
+                    hidden_size, hidden_size, **self.sageconv_params
+                )
                 self.sageconv_hidden.append(sageconv_layer)
 
     def forward(
@@ -159,8 +165,8 @@ class MeshAEEmbedding(nn.Module):
         """
         embeds = torch.cat(
             [
-                self.embeddings[name](indices) for name, indices in
-                self.extract_features(coords).items()
+                self.embeddings[name](indices)
+                for name, indices in self.extract_features(coords).items()
             ],
             dim=-1,
         )
@@ -182,15 +188,15 @@ class MeshAEEmbedding(nn.Module):
             for conv in self.sageconv_hidden:
                 embeds = conv(embeds, edges)
 
-            embeds = (
-                embeds.new_empty((B, T, embeds.size(-1)))
-                .masked_scatter(face_masks.unsqueeze(-1), embeds)
+            embeds = embeds.new_empty((B, T, embeds.size(-1))).masked_scatter(
+                face_masks.unsqueeze(-1), embeds
             )
 
         return embeds
 
     def extract_features(
-        self, coords: TensorType["b", "n_face", 3, 3, float],
+        self,
+        coords: TensorType["b", "n_face", 3, 3, float],
     ) -> dict[MeshAEFeatNameType, TensorType["b", "n_face", -1, int]]:
         r"""Extract and quantize features extracted from batch of faces.
 
@@ -220,7 +226,8 @@ class MeshAEEmbedding(nn.Module):
             "area": _quantize("area", cross.norm(-1, keepdim=True) * 0.5),
             "vertex": _quantize("vertex", coords.flatten(-2)),
             "angle": _quantize(
-                "angle", (
+                "angle",
+                (
                     F.cosine_similarity(coords, shifts, dim=-1)
                     .clamp(1e-5 - 1, 1 - 1e-5)
                     .arccos()
@@ -244,7 +251,7 @@ class MeshAEEncoder(nn.Module):
         the face embeddings to VQ-VAE encoder.
     num_quantizers : int, default=2
         The number of codebook embeddings used to approximate the input embedding. If
-        set to 1, the RQ-VAE reduces to the regular VQ-VAE. 
+        set to 1, the RQ-VAE reduces to the regular VQ-VAE.
     num_codebook_codes : int, default=4096
         Number of unique codebook codes.
     commitment_weight : float, default=1.0
@@ -368,11 +375,14 @@ class MeshAEEncoder(nn.Module):
         if B > 1:
             num_face_first_mesh = face_masks[0].sum().int().item()
             num_vrtx_first_mesh = vrtx_counts[0].item()
-            assert indices[num_face_first_mesh * 3:].min().item() == num_vrtx_first_mesh
+            assert (
+                indices[num_face_first_mesh * 3 :].min().item() == num_vrtx_first_mesh
+            )
 
         vrtx_embeds, vrtx_codes, commit_loss = self.quantizer(
             vrtx_embeds.scatter_reduce_(
-                0, indices.unsqueeze(-1).expand(-1, D // 3),
+                0,
+                indices.unsqueeze(-1).expand(-1, D // 3),
                 src=rearrange(face_embeds[face_masks], "t (v e) -> (t v) e", v=3),
                 reduce="mean",
                 include_self=False,
@@ -380,18 +390,14 @@ class MeshAEEncoder(nn.Module):
             return_all_codes=False,
         )
         face_embeds = self.proj_latent(
-            face_embeds.new_empty((B, T, D))
-            .masked_scatter(
+            face_embeds.new_empty((B, T, D)).masked_scatter(
                 face_masks.unsqueeze(-1),
                 rearrange(vrtx_embeds[indices], "(t v) e -> t (v e)", v=3),
             ),
         )
-        face_codes = (
-            faces.new_empty((B, T, self.num_quantizers * 3))
-            .masked_scatter(
-                face_masks.unsqueeze(-1),
-                rearrange(vrtx_codes[indices], "(t v) q -> t (v q)", v=3),
-            )
+        face_codes = faces.new_empty((B, T, self.num_quantizers * 3)).masked_scatter(
+            face_masks.unsqueeze(-1),
+            rearrange(vrtx_codes[indices], "(t v) q -> t (v q)", v=3),
         )
         return face_embeds, face_codes, commit_loss.sum()
 
@@ -584,7 +590,7 @@ class MeshAEModel(nn.Module):
         ----------
         coords : TensorType["b", "n_face", 9, float]
             Raw face coordinates without quantization, having the vertex and coordinate
-            dimensions flattened. 
+            dimensions flattened.
         logits : TensorType["b", "n_face", 9, -1, float]
             Predicted logits from decoder.
 
@@ -600,9 +606,13 @@ class MeshAEModel(nn.Module):
         return 0
 
     @torch.no_grad
-    def encode(self,):
+    def encode(
+        self,
+    ):
         pass
 
     @torch.no_grad
-    def decode(self,):
+    def decode(
+        self,
+    ):
         pass
