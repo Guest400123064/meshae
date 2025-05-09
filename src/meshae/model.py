@@ -13,7 +13,7 @@ from torchtyping import TensorType
 from vector_quantize_pytorch import ResidualVQ
 from x_transformers import Encoder
 
-from meshae.utils import quantize
+from meshae.utils import quantize, gaussian_blur_1d
 
 b = None
 n_edge = None
@@ -456,7 +456,7 @@ class MeshAEDecoder(nn.Module):
         num_refiner_layers: int = 2,
         num_refiner_heads: int = 8,
         coord_num_bins: int = 128,
-    ):
+    ) -> None:
         super().__init__()
 
         self.num_decoder_layers = num_decoder_layers
@@ -540,6 +540,7 @@ class MeshAEModel(nn.Module):
         num_refiner_heads: int = 8,
         sample_codebook_temp: float = 0.1,
         commitment_weight: float = 1.0,
+        bin_smooth_blur_sigma: float = 0.4,
     ) -> None:
         super().__init__()
 
@@ -583,6 +584,8 @@ class MeshAEModel(nn.Module):
             coord_num_bins=feature_configs["vertex"].num_bins,
         )
 
+        self.bin_smooth_blur_sigma = bin_smooth_blur_sigma
+
     def forward(
         self,
         *,
@@ -591,8 +594,13 @@ class MeshAEModel(nn.Module):
         edges: TensorType["b", "n_edge", 2, int],
         face_masks: TensorType["b", "n_face", bool],
         edge_masks: TensorType["b", "n_edge", bool],
-    ) -> TensorType[(), float]:
-        r"""
+    ) -> tuple[
+        TensorType[(), float],
+        tuple[TensorType[(), float], TensorType[(), float]],
+        TensorType["b", "n_face", 9, -1, float],
+        TensorType["b", "n_face", 3, 3, float],
+    ]:
+        r"""Full encode-decode path and return VQ-VAE losses for model training. 
 
         Parameters
         ----------
@@ -608,6 +616,20 @@ class MeshAEModel(nn.Module):
             corresponding face mask values being 1.
         edge_masks : TensorType["b", "n_edge", bool]
             Boolean masks used to separate actual faces from paddings.
+
+        Returns
+        -------
+        loss : TensorType[(), float]
+            Combined loss for auto-encoder training.
+        loss_breakdown : tuple[TensorType[(), float], TensorType[(), float]]
+            A tuple consisting of the reconstruction loss and commitment loss.
+        logits : TensorType["b", "n_face", 9, -1, float]
+            Predicted face vertex logits. Vertex and coordinate dimensions are flattened
+            into a single dimension. The size of the last dimension depending on the
+            coordinate quantization settings.
+        coords : TensorType["b", "n_face", 3, 3, float]
+            Batch of trimesh faces with each face represented as the 3 x-y-z
+            coordinates of 3 vertices.
         """
         faces = faces.masked_fill(~face_masks.unsqueeze(-1), 0)
         index = torch.arange(vertices.size(0), device=vertices.device)[:, None, None]
@@ -618,14 +640,19 @@ class MeshAEModel(nn.Module):
         logits = self.decoder(embeds, face_masks)
 
         recon_loss = self.compute_recon_loss(coords.flatten(-2), logits)
-        return coords, logits, recon_loss, commit_loss
+        return (recon_loss + commit_loss), (recon_loss, commit_loss), logits, coords
 
     def compute_recon_loss(
         self,
         coords: TensorType["b", "n_face", 9, float],
         logits: TensorType["b", "n_face", 9, -1, float],
+        face_masks: TensorType["b", "n_face", bool],
     ) -> TensorType[(), float]:
         r"""Compute reconstruction loss.
+
+        Optionally, one can apply Gaussian blur to the one-hot quantized coordinates.
+        This is controlled by the ``self.bin_smooth_blur_sigma`` value. Setting to 0.0
+        results in regular one-hot encoding.
 
         Parameters
         ----------
@@ -634,17 +661,31 @@ class MeshAEModel(nn.Module):
             dimensions flattened.
         logits : TensorType["b", "n_face", 9, -1, float]
             Predicted logits from decoder.
+        face_masks : TensorType["b", "n_face", bool]
+            Boolean masks used to separate actual faces from paddings. Actual faces have
+            corresponding face mask values being 1.
 
         Returns
         -------
         recon_loss : TensorType[(), float]
             Reconstruction loss.
         """
-        config = self.feature_configs["vertex"]
-        coords = quantize(coords, high_low=config.high_low, num_bins=config.num_bins)
-        logits = logits.log_softmax(-1)
+        logits = rearrange(logits, "b ... q -> b q (...)").log_softmax(1)
+        face_masks = repeat(face_masks, "b t -> b (t r)", r=9)
 
-        return 0
+        config = self.feature_configs["vertex"]
+        coords = rearrange(
+            quantize(coords, high_low=config.high_low, num_bins=config.num_bins),
+            "b ... -> b 1 (...)",
+        )
+        coords = torch.zeros_like(logits).scatter(1, coords, 1.0)
+        if self.bin_smooth_blur_sigma > 0.0:
+            coords = gaussian_blur_1d(coords, sigma=self.bin_smooth_blur_sigma)
+
+        assert coords.size() == logits.size(), "Coords and logits have different shape."
+
+        recon_loss = (-coords * logits).sum(1)[face_masks].mean()
+        return recon_loss
 
     @torch.no_grad
     def encode(
