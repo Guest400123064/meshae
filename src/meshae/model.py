@@ -240,22 +240,46 @@ class MeshAEEmbedding(nn.Module):
 class MeshAEEncoder(nn.Module):
     r"""Compute latents and corresponding face codes for input mesh.
 
+    Encoder module incorporates a transformer encoder and a vector quantizer. Face
+    embeddings from the embedding layer are passed through the network to get quantized
+    into latents and commitment loss (including both ``z`` to ``e`` and ``e`` to ``z``)
+    is returned as well.
+
+    To facilitate the decoding process, the PivotMesh paper [1]_ mentioned an operation
+    introduced in the MeshGPT paper [2]_ to ensure consistent embeddings between shared
+    vertices. Specifically, face embeddings are projected to vertex embeddings and then
+    embeddings for shared vertices (from different faces) are substituted with average-
+    pooling embeddings. Please refer to the ``self.forward`` method for more details
+
     Parameters
     ----------
     codebook_size : int, default=256
         Codebook code (latent) dimension.
     hidden_size : int, default=512
         Hidden state dimension.
-    num_sageconv_layers : int, default=1
-        Number of ``SAGEConv`` layers to capture face topological structures before sending
-        the face embeddings to VQ-VAE encoder.
+    num_encoder_layers : int, default=6
+        Number of encoder transformer layers.
+    num_encoder_heads : int, default=8
+        Number of encoder transformer heads.
     num_quantizers : int, default=2
         The number of codebook embeddings used to approximate the input embedding. If
         set to 1, the RQ-VAE reduces to the regular VQ-VAE.
     num_codebook_codes : int, default=4096
         Number of unique codebook codes.
+    sample_codebook_temp : float, default=0.1
+        The codebook sampling temperature parameter for RQ-VAE. Setting to 0.0 is
+        equivalent to deterministic code retrieval [3]_.
     commitment_weight : float, default=1.0
         The weighting parameter for the VQ-VAE commitment loss term.
+
+    References
+    ----------
+    .. [1] `"PivotMesh: Generic 3D Mesh Generation via Pivot Vertices Guidance", Wang et al.
+            <https://arxiv.org/html/2405.16890v1#S3>`_
+    .. [2] `"MeshGPT: Generating Triangle Meshes with Decoder-Only Transformers", Siddiqui et al.
+            <https://arxiv.org/abs/2311.15475>`_
+    .. [3] `"Autoregressive Image Generation using Residual Quantization", Lee et al.
+            <https://arxiv.org/abs/2203.01941>`_
     """
 
     def __init__(
@@ -267,6 +291,7 @@ class MeshAEEncoder(nn.Module):
         num_encoder_heads: int = 8,
         num_quantizers: int = 2,
         num_codebook_codes: int = 4096,
+        sample_codebook_temp: float = 0.1,
         commitment_weight: float = 1.0,
     ) -> None:
         super().__init__()
@@ -284,6 +309,7 @@ class MeshAEEncoder(nn.Module):
         self.num_quantizers = num_quantizers
         self.num_codebook_codes = num_codebook_codes
         self.codebook_size = codebook_size
+        self.sample_codebook_temp = sample_codebook_temp
         self.commitment_weight = commitment_weight
         self.proj_vertex = nn.Linear(hidden_size, codebook_size * 3)
         self.proj_latent = nn.Linear(codebook_size * 3, hidden_size)
@@ -295,7 +321,7 @@ class MeshAEEncoder(nn.Module):
             shared_codebook=True,
             rotation_trick=True,
             stochastic_sample_codes=True,
-            sample_codebook_temp=0.1,
+            sample_codebook_temp=sample_codebook_temp,
             commitment_weight=commitment_weight,
         )
 
@@ -310,12 +336,6 @@ class MeshAEEncoder(nn.Module):
         TensorType[(), float],
     ]:
         r"""Create face embeddings from a batch of meshes.
-
-        To facilitate the decoding process, the PivotMesh paper [1]_ mentioned an operation
-        introduced in the MeshGPT paper [2]_ to ensure consistent embeddings between shared
-        vertices. Specifically, face embeddings are projected to vertex embeddings and then
-        embeddings for shared vertices (from different faces) are substituted with average-
-        pooling embeddings.
 
         Parameters
         ----------
@@ -337,13 +357,6 @@ class MeshAEEncoder(nn.Module):
             number of quantizers in the RQ-VAE.
         commit_loss : TensorType[(), float]
             The commit loss used to update the VQ-VAE codebook codes.
-
-        References
-        ----------
-        .. [1] `"PivotMesh: Generic 3D Mesh Generation via Pivot Vertices Guidance", Wang et al.
-            <https://arxiv.org/html/2405.16890v1#S3>`_
-        .. [2] `"MeshGPT: Generating Triangle Meshes with Decoder-Only Transformers", Siddiqui et al.
-                <https://arxiv.org/abs/2311.15475>`_
         """
         face_embeds = self.encoder(face_embeds, mask=face_masks)
         face_embeds = self.proj_vertex(face_embeds)
@@ -404,19 +417,43 @@ class MeshAEEncoder(nn.Module):
 
 
 class MeshAEDecoder(nn.Module):
-    r"""
+    r"""Implements the PivotMesh coarse-to-fine decoder [1]_.
+
+    The decoder module consists of
 
     Parameters
     ----------
+    hidden_size : int, default=512
+        Hidden state dimension for both coarse decoder and fine decoder. In the PivotMesh
+        implementation [2]_, the hidden size for two decoders can be different.
+    num_decoder_layers : int, default=4
+        Number of coarse decoder transformer layers.
+    num_decoder_heads : int, default=8
+        Number of coarse decoder transformer heads.
+    num_refiner_layers : int, default=2
+        Number of refiner decoder transformer layers. The refiner transforms from face latents
+        to vertex latents.
+    num_refiner_heads : int, default=8
+        Number of refiner decoder transformer heads. The refiner transforms from face latents
+        to vertex latents.
+    coord_num_bins : int, default=128
+        Number of quantization bins for coordinates.
+
+    References
+    ----------
+    .. [1] `"PivotMesh: Generic 3D Mesh Generation via Pivot Vertices Guidance", Wang et al.
+            <https://arxiv.org/html/2405.16890v1#S3>`_
+    .. [2] `"PivotMesh GitHub Repository: 'meshAE.py'", Wang et al.
+            <https://github.com/whaohan/pivotmesh/blob/ed5652d7584e631cd400fc44e8fee285289e1482/model/meshAE.py#L199>`_
     """
 
     def __init__(
         self,
         *,
         hidden_size: int = 512,
-        num_decoder_layers: int = 6,
+        num_decoder_layers: int = 4,
         num_decoder_heads: int = 8,
-        num_refiner_layers: int = 6,
+        num_refiner_layers: int = 2,
         num_refiner_heads: int = 8,
         coord_num_bins: int = 128,
     ):
@@ -501,6 +538,7 @@ class MeshAEModel(nn.Module):
         num_decoder_heads: int = 8,
         num_refiner_layers: int = 6,
         num_refiner_heads: int = 8,
+        sample_codebook_temp: float = 0.1,
         commitment_weight: float = 1.0,
     ) -> None:
         super().__init__()
@@ -519,6 +557,7 @@ class MeshAEModel(nn.Module):
         self.num_encoder_heads = num_encoder_heads
         self.num_quantizers = num_quantizers
         self.num_codebook_codes = num_codebook_codes
+        self.sample_codebook_temp = sample_codebook_temp
         self.commitment_weight = commitment_weight
         self.encoder = MeshAEEncoder(
             codebook_size=codebook_size,
@@ -527,6 +566,7 @@ class MeshAEModel(nn.Module):
             num_encoder_heads=num_encoder_heads,
             num_quantizers=num_quantizers,
             num_codebook_codes=num_codebook_codes,
+            sample_codebook_temp=sample_codebook_temp,
             commitment_weight=commitment_weight,
         )
 
