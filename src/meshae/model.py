@@ -20,7 +20,7 @@ n_edge = None
 n_face = None
 n_vrtx = None
 
-MeshAEFeatNameType = Literal["area", "norm", "angle", "vertex"]
+MeshAEFeatNameType = Literal["area", "norm", "acos", "vrtx"]
 
 
 @dataclass
@@ -87,7 +87,7 @@ class MeshAEEmbedding(nn.Module):
             <https://github.com/lucidrains/meshgpt-pytorch/blob/672d921d733ea5f05f5d0724efbbf2ab88440981/meshgpt_pytorch/meshgpt_pytorch.py#L157>`_
     """
 
-    NUM_EXTRACTED_FEATURES = {"vertex": 9, "angle": 3, "norm": 3, "area": 1}
+    NUM_EXTRACTED_FEATURES = {"vrtx": 9, "acos": 3, "norm": 3, "area": 1}
 
     def __init__(
         self,
@@ -224,9 +224,9 @@ class MeshAEEmbedding(nn.Module):
         feats = {
             "norm": _quantize("norm", F.normalize(cross, 2, dim=-1)),
             "area": _quantize("area", cross.norm(-1, keepdim=True) * 0.5),
-            "vertex": _quantize("vertex", coords.flatten(-2)),
-            "angle": _quantize(
-                "angle",
+            "vrtx": _quantize("vrtx", coords.flatten(-2)),
+            "acos": _quantize(
+                "acos",
                 (
                     F.cosine_similarity(coords, shifts, dim=-1)
                     .clamp(1e-5 - 1, 1 - 1e-5)
