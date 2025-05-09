@@ -639,7 +639,9 @@ class MeshAEModel(nn.Module):
         embeds, _, commit_loss = self.encoder(faces, embeds, face_masks)
         logits = self.decoder(embeds, face_masks)
 
-        recon_loss = self.compute_recon_loss(coords.flatten(-2), logits)
+        with torch.autocast(enabled=False):
+            recon_loss = self.compute_recon_loss(coords.flatten(-2), logits)
+
         return (recon_loss + commit_loss), (recon_loss, commit_loss), logits, coords
 
     def compute_recon_loss(
