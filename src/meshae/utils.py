@@ -42,7 +42,7 @@ def dequantize(
     return tensor * (high - low) + low
 
 
-def gaussian_blur_1d(
+def gaussian_blur1d(
     tensor: TensorType[..., float], *, sigma: float = 1.0,
 ) -> TensorType[..., float]:
     r"""Apply 1D Gaussian blur to the last dimension of input tensor."""

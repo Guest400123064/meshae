@@ -13,7 +13,7 @@ from torchtyping import TensorType
 from vector_quantize_pytorch import ResidualVQ
 from x_transformers import Encoder
 
-from meshae.utils import quantize, gaussian_blur_1d
+from meshae.utils import quantize, gaussian_blur1d
 
 b = None
 n_edge = None
@@ -680,7 +680,7 @@ class MeshAEModel(nn.Module):
         )
         coords = torch.zeros_like(logits).scatter(1, coords, 1.0)
         if self.bin_smooth_blur_sigma > 0.0:
-            coords = gaussian_blur_1d(coords, sigma=self.bin_smooth_blur_sigma)
+            coords = gaussian_blur1d(coords, sigma=self.bin_smooth_blur_sigma)
 
         assert coords.size() == logits.size(), "Coords and logits have different shape."
 
