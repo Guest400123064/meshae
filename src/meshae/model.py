@@ -13,7 +13,7 @@ from torchtyping import TensorType
 from vector_quantize_pytorch import ResidualVQ
 from x_transformers import Encoder
 
-from meshae.utils import quantize, gaussian_blur1d
+from meshae.utils import gaussian_blur1d, quantize
 
 b = None
 n_edge = None
@@ -377,10 +377,10 @@ class MeshAEEncoder(nn.Module):
         #
         # NOTE: Padding index should be NOT exceed the maximum number of vertices in each mesh. It
         # could be 0 since we will mask out the paddings anyway.
-        vrtx_counts = faces.flatten(-2).amax(-1).cumsum(0).int() + 1
-        vrtx_embeds = face_embeds.new_empty((vrtx_counts.max().item(), D // 3))
+        vrtx_counts = faces.amax((1, 2)).int() + 1
+        vrtx_embeds = face_embeds.new_empty((vrtx_counts.sum().item(), D // 3))
 
-        offsets = F.pad(vrtx_counts, (1, -1), value=0)
+        offsets = F.pad(vrtx_counts.cumsum(0), (1, -1), value=0)
         indices = (faces + offsets[:, None, None])[face_masks].flatten()
 
         # A few sanity checks to verify `indices` validity
@@ -418,8 +418,6 @@ class MeshAEEncoder(nn.Module):
 
 class MeshAEDecoder(nn.Module):
     r"""Implements the PivotMesh coarse-to-fine decoder [1]_.
-
-    The decoder module consists of
 
     Parameters
     ----------
@@ -517,10 +515,53 @@ class MeshAEDecoder(nn.Module):
 
 
 class MeshAEModel(nn.Module):
-    r"""
+    r"""PivotMesh mesh tokenizer [1]_.
 
     Parameters
     ----------
+    feature_configs : list[MeshAEFeatureConfig]
+        Configurations for how to quantize and embed features extracted from faces. Please
+        refer to ``MeshAEFeatureConfig`` for more details.
+    codebook_size : int, default=256
+        Codebook code (latent) dimension.
+    hidden_size : int, default=512
+        Hidden state dimension.
+    num_encoder_layers : int, default=6
+        Number of encoder transformer layers.
+    num_encoder_heads : int, default=8
+        Number of encoder transformer heads.
+    num_quantizers : int, default=2
+        The number of codebook embeddings used to approximate the input embedding. If
+        set to 1, the RQ-VAE reduces to the regular VQ-VAE.
+    num_codebook_codes : int, default=4096
+        Number of unique codebook codes.
+    num_decoder_layers : int, default=4
+        Number of coarse decoder transformer layers.
+    num_decoder_heads : int, default=8
+        Number of coarse decoder transformer heads.
+    num_refiner_layers : int, default=2
+        Number of refiner decoder transformer layers. The refiner transforms from face latents
+        to vertex latents.
+    num_refiner_heads : int, default=8
+        Number of refiner decoder transformer heads. The refiner transforms from face latents
+        to vertex latents.
+    sample_codebook_temp : float, default=0.1
+        The codebook sampling temperature parameter for RQ-VAE. Setting to 0.0 is
+        equivalent to deterministic code retrieval [3]_.
+    commitment_weight : float, default=1.0
+        The weighting parameter for the VQ-VAE commitment loss term.
+    bin_smooth_blur_sigma : float, default=0.4
+        Gaussian blur sigma parameter used to smooth the quantized, one-hot encoded coordinates
+        for reconstruction loss calculation [2]_.
+
+    References
+    ----------
+    .. [1] `"PivotMesh: Generic 3D Mesh Generation via Pivot Vertices Guidance", Wang et al.
+            <https://arxiv.org/html/2405.16890v1#S3>`_
+    .. [2] `"MeshGPT: Generating Triangle Meshes with Decoder-Only Transformers", Siddiqui et al.
+            <https://arxiv.org/abs/2311.15475>`_
+    .. [3] `"Autoregressive Image Generation using Residual Quantization", Lee et al.
+            <https://arxiv.org/abs/2203.01941>`_
     """
 
     def __init__(
@@ -600,7 +641,7 @@ class MeshAEModel(nn.Module):
         TensorType["b", "n_face", 9, -1, float],
         TensorType["b", "n_face", 3, 3, float],
     ]:
-        r"""Full encode-decode path and return VQ-VAE losses for model training. 
+        r"""Full encode-decode path and return VQ-VAE losses for model training.
 
         Parameters
         ----------
