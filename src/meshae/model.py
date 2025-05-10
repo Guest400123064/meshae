@@ -5,6 +5,7 @@ from typing import Literal
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from beartype import beartype
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 from torch_geometric.nn.conv import SAGEConv
@@ -539,6 +540,7 @@ class MeshAEModel(nn.Module):
             <https://arxiv.org/abs/2203.01941>`_
     """
 
+    @beartype
     def __init__(
         self,
         feature_configs: dict[MeshAEFeatNameType, MeshAEFeatEmbedConfig],

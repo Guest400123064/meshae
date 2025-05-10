@@ -9,18 +9,17 @@ authors = [
 license = {file = "LICENSE"}
 readme = "README.md"
 packages = [
-    { include = "meshae", from = "src" }
+    {include = "meshae", from = "src"}
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "pytorch3d @ https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu121_pyt230/pytorch3d-0.7.6-cp310-cp310-linux_x86_64.whl",
     "trimesh (>=4.6.8,<5.0.0)",
     "einops (>=0.8.1,<0.9.0)",
     "vector-quantize-pytorch (>=1.22.15,<2.0.0)",
     "beartype (>=0.20.2,<0.21.0)",
     "torchtyping (>=0.1.5,<0.2.0)",
-    "objaverse (>=0.1.7,<0.2.0)",
     "pytorch-accelerated (>=0.1.52,<0.2.0)",
+    "torch-geometric (>=2.6.1,<3.0.0)",
 ]
 
 [build-system]
@@ -41,14 +40,15 @@ pre-commit = "^4.2.0"
 wandb = "^0.19.10"
 
 [tool.poetry.group.pivotmesh.dependencies]
-accelerate = "^1.3.0"
 pytorch-custom-utils = "^0.0.21"
 meshgpt-pytorch = "^1.8.1"
 tqdm = "^4.67.1"
 pytorch-warmup = "^0.2.0"
-torch-geometric = "^2.6.1"
 easydict = "^1.13"
 chardet = "^5.2.0"
 pyrender = "^0.1.45"
 opencv-python = "^4.11.0.86"
 pyrr = "^0.10.3"
+
+[tool.poetry.group.data.dependencies]
+objaverse = "^0.1.7"
