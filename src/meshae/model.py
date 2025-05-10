@@ -622,7 +622,7 @@ class MeshAEModel(nn.Module):
             num_decoder_heads=num_decoder_heads,
             num_refiner_layers=num_refiner_layers,
             num_refiner_heads=num_refiner_heads,
-            coord_num_bins=feature_configs["vertex"].num_bins,
+            coord_num_bins=feature_configs["vrtx"].num_bins,
         )
 
         self.bin_smooth_blur_sigma = bin_smooth_blur_sigma
