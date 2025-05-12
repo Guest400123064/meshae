@@ -28,6 +28,8 @@ def normalize_mesh(
 
     Returns
     -------
+    mesh : trimesh.Trimesh
+        
     tuple[Trimesh, NDArray[np.float32], float]
         ``(normalized_mesh, center, net_scale)`` in that order. ``center``
         and ``net_scale`` is used to restore the transformation. 
@@ -40,13 +42,13 @@ def normalize_mesh(
     mesh = mesh.copy()
     bbmin, bbmax = mesh.bounds
 
-    c = -0.5 * (bbmax + bbmin)
-    s = scale / (bbmax - bbmin).max()
+    ctr = -0.5 * (bbmax + bbmin)
+    scl = scale / (bbmax - bbmin).max()
 
-    mesh.apply_translation(c)
-    mesh.apply_scale(s)
+    mesh.apply_translation(ctr)
+    mesh.apply_scale(scl)
 
-    return mesh, c, s
+    return mesh, ctr, scl
 
 
 def normalize_vertices(

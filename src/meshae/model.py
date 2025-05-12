@@ -131,7 +131,7 @@ class MeshAEEmbedding(nn.Module):
             Batch of **face** edges used to identify the topological structure between
             faces. This is only used in ``SAGEConv`` layers.
         edge_masks : TensorType["b", "n_edge", bool]
-            Boolean masks used to separate actual faces from paddings.
+            Boolean masks used to separate actual edges from paddings.
 
         Returns
         -------
@@ -633,7 +633,7 @@ class MeshAEModel(nn.Module):
             Boolean masks used to separate actual faces from paddings. Actual faces have
             corresponding face mask values being 1.
         edge_masks : TensorType["b", "n_edge", bool]
-            Boolean masks used to separate actual faces from paddings.
+            Boolean masks used to separate actual edges from paddings.
 
         Returns
         -------
