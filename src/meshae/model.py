@@ -362,8 +362,8 @@ class MeshAEEncoder(nn.Module):
         indices = (faces + offsets[:, None, None])[face_masks].flatten()
 
         # A few sanity checks to verify `indices` validity
-        assert indices.max().item() + 1 == vrtx_embeds.size(-1)
-        assert indices.size(-1) == face_masks.sum().item()
+        assert indices.max().item() + 1 == vrtx_embeds.size(0)
+        assert indices.size(-1) == face_masks.sum().item() * 3
         if B > 1:
             num_face_first_mesh = face_masks[0].sum().int().item()
             num_vrtx_first_mesh = vrtx_counts[0].item()
@@ -659,8 +659,8 @@ class MeshAEModel(nn.Module):
         embeds, _, commit_loss = self.encoder(faces, embeds, face_masks)
         logits = self.decoder(embeds, face_masks)
 
-        with torch.autocast(enabled=False):
-            recon_loss = self.compute_recon_loss(coords.flatten(-2), logits)
+        with torch.autocast(coords.device.type, enabled=False):
+            recon_loss = self.compute_recon_loss(coords.flatten(-2), logits, face_masks)
 
         return (recon_loss + commit_loss), (recon_loss, commit_loss), logits, coords
 
@@ -695,7 +695,7 @@ class MeshAEModel(nn.Module):
         logits = rearrange(logits, "b ... q -> b q (...)").log_softmax(1)
         face_masks = repeat(face_masks, "b t -> b (t r)", r=9)
 
-        config = self.feature_configs["vertex"]
+        config = self.feature_configs["vrtx"]
         coords = rearrange(
             quantize(coords, high_low=config.high_low, num_bins=config.num_bins),
             "b ... -> b 1 (...)",
