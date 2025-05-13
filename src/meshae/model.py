@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import torch
 import torch.nn as nn
@@ -9,12 +9,14 @@ from beartype import beartype
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 from torch_geometric.nn.conv import SAGEConv
-from torchtyping import TensorType
 from vector_quantize_pytorch import ResidualVQ
 from x_transformers import Encoder
 
 from meshae.config import MeshAEFeatEmbedConfig
 from meshae.utils import gaussian_blur1d, quantize
+
+if TYPE_CHECKING:
+    from torchtyping import TensorType
 
 b = None
 n_edge = None
@@ -141,7 +143,7 @@ class MeshAEEmbedding(nn.Module):
         """
         embeds = torch.cat(
             [
-                self.embeddings[name](indices)
+                self.embeddings[name](indices).flatten(-2)
                 for name, indices in self.extract_features(coords).items()
             ],
             dim=-1,
@@ -199,7 +201,7 @@ class MeshAEEmbedding(nn.Module):
         cross = torch.cross(e1, e2, dim=-1)
         feats = {
             "norm": _quantize("norm", F.normalize(cross, 2, dim=-1)),
-            "area": _quantize("area", cross.norm(-1, keepdim=True) * 0.5),
+            "area": _quantize("area", cross.norm(dim=-1, keepdim=True) * 0.5),
             "vrtx": _quantize("vrtx", coords.flatten(-2)),
             "acos": _quantize(
                 "acos",

@@ -1,23 +1,30 @@
 from __future__ import annotations
 
-import glob
-from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
+import trimesh
 import torch
-from torch.utils.data import Dataset
+import numpy as np
+from einops import rearrange
+from scipy.spatial.transform import Rotation
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import Dataset, DataLoader
 
-
-@dataclass
-class BaseDatasetConfig:
-    path: Path 
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
+    from torchtyping import TensorType
 
 
 class BaseDataset(Dataset):
-    def __init__(self, config: BaseDatasetConfig) -> None:
+    def __init__(
+        self,
+        path: Path,
+
+    ) -> None:
         super().__init__()
 
-        self.config = config
+        self.path = path
 
     def __len__(self) -> int:
         raise NotImplementedError
@@ -26,5 +33,4 @@ class BaseDataset(Dataset):
         raise NotImplementedError
 
     def load_one(self, path: Path):
-
-
+        pass
