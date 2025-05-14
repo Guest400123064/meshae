@@ -54,7 +54,9 @@ def dequantize(
 
 
 def gaussian_blur1d(
-    tensor: TensorType[..., float], *, sigma: float = 1.0,
+    tensor: TensorType[..., float],
+    *,
+    sigma: float = 1.0,
 ) -> TensorType[..., float]:
     r"""Apply 1D Gaussian blur to the last dimension of input tensor."""
 
@@ -63,7 +65,10 @@ def gaussian_blur1d(
     half_width = width // 2
 
     distance = torch.arange(
-        -half_width, half_width + 1, dtype=tensor.dtype, device=tensor.device,
+        -half_width,
+        half_width + 1,
+        dtype=tensor.dtype,
+        device=tensor.device,
     )
     gaussian = torch.exp(-(distance**2) / (2 * sigma**2))
     gaussian = F.normalize(gaussian, 1, dim=-1)
@@ -113,7 +118,9 @@ def compute_face_edges(
         dim=-1,
     )
 
-    vrtx_shared = rearrange(faces, "t v -> t 1 v 1") == rearrange(faces, "t v -> 1 t 1 v")
+    vrtx_shared = rearrange(faces, "t v -> t 1 v 1") == rearrange(
+        faces, "t v -> 1 t 1 v"
+    )
     vrtx_shared = vrtx_shared.any(-1).sum(-1)
     is_neighbor = vrtx_shared >= threshold
 
@@ -186,7 +193,8 @@ def compute_sorted_faces(
 
 
 def compute_normalized_mesh(
-    mesh: trimesh.Trimesh, scale: float = 0.95,
+    mesh: trimesh.Trimesh,
+    scale: float = 0.95,
 ) -> tuple[trimesh.Trimesh, NDArray[np.float32], float]:
     r"""Normalize the mesh object into a bounding box with the long diagonal being 1.
 
