@@ -28,7 +28,6 @@ class MeshAEDataset(Dataset):
         path: Path,
         *,
         sort_face_by: str = "zxy",
-        neighbor_if_share_one_vertex: bool = False,
         include_self: bool = False,
         vertex_padding_value: float = 0.0,
         face_padding_value: int = -1,
@@ -43,7 +42,6 @@ class MeshAEDataset(Dataset):
             raise RuntimeError(msg)
 
         self.sort_face_by = sort_face_by
-        self.neighbor_if_share_one_vertex = neighbor_if_share_one_vertex
         self.include_self = include_self
 
         self.vertex_padding_value = vertex_padding_value
@@ -78,11 +76,8 @@ class MeshAEDataset(Dataset):
 
         vertices = torch.from_numpy(mesh.vertices)
         faces = compute_sorted_faces(mesh, by=self.sort_face_by, return_tensor=True)
-        edges = compute_face_edges(
-            faces,
-            neighbor_if_share_one_vertex=self.neighbor_if_share_one_vertex,
-            include_self=self.include_self,
-        )
+        edges = compute_face_edges(faces, include_self=self.include_self)
+
         return {"faces": faces, "edges": edges, "vertices": vertices}
 
     def collate_fn(
