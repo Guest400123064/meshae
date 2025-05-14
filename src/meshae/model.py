@@ -17,11 +17,7 @@ from meshae.utils import gaussian_blur1d, quantize
 
 if TYPE_CHECKING:
     from torchtyping import TensorType
-
-b = None
-n_edge = None
-n_face = None
-n_vrtx = None
+    from meshae.utils import b, n_edge, n_face, n_vrtx
 
 MeshAEFeatNameType = Literal["area", "norm", "acos", "vrtx"]
 
