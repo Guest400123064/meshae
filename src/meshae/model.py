@@ -12,13 +12,14 @@ from torch_geometric.nn.conv import SAGEConv
 from vector_quantize_pytorch import ResidualVQ
 from x_transformers import Encoder
 
-from meshae.utils import gaussian_blur1d, quantize
+from meshae.config import MeshAEFeatEmbedConfig
+from meshae.typing import MeshAEFeatNameType
+from meshae.utils import dequantize, gaussian_blur1d, quantize
 
 if TYPE_CHECKING:
     from torchtyping import TensorType
 
-    from meshae.config import MeshAEFeatEmbedConfig
-    from meshae.typing import MeshAEFeatNameType, b, n_edge, n_face, n_vrtx
+    from meshae.typing import b, n_edge, n_face, n_vrtx
 
 
 class MeshAEEmbedding(nn.Module):
@@ -327,7 +328,7 @@ class MeshAEEncoder(nn.Module):
             Batch of face embedding sequences created from quantized vertex latents.
         face_codes : TensorType["b", "n_face", -1, int]
             Batch of face codebook code sequences. The number of code depends on the
-            number of quantizers in the RQ-VAE.
+            number of quantizers in the RQ-VAE. Specifically, it will be ``3 * n_quant``.
         commit_loss : TensorType[(), float]
             The commit loss used to update the VQ-VAE codebook codes.
         """
@@ -443,6 +444,8 @@ class MeshAEDecoder(nn.Module):
         self.num_refiner_heads = num_refiner_heads
         self.proj_refine = nn.Sequential(
             nn.Linear(hidden_size, 3 * hidden_size),
+            nn.GELU(),
+            nn.Linear(3 * hidden_size, 3 * hidden_size),
             Rearrange("b t (v d) -> b (t v) d", v=3, d=hidden_size),
         )
         self.refiner = Encoder(
@@ -707,11 +710,99 @@ class MeshAEModel(nn.Module):
     @torch.no_grad()
     def encode(
         self,
-    ):
-        pass
+        vertices: TensorType["b", "n_vrtx", 3, float],
+        faces: TensorType["b", "n_face", 3, int],
+        edges: TensorType["b", "n_edge", 2, int],
+        face_masks: TensorType["b", "n_face", bool],
+        edge_masks: TensorType["b", "n_edge", bool],
+    ) -> TensorType["b", "n_face", -1, int]:
+        r"""Set to eval mode and produce codes for batch of faces.
+
+        Parameters
+        ----------
+        vertices : TensorType["b", "n_vrtx", 3, float]
+            Batch of mesh vertex sets with each vertex represented by x-y-z coordinates.
+        faces : TensorType["b", "n_face", 3, int]
+            Batch of mesh face sequences with each face represented by three vertex ids.
+        edges : TensorType["b", "n_edge", 2, int]
+            Batch of **face** edges used to identify the topological structure between
+            faces. This is only used in ``SAGEConv`` layers.
+        face_masks : TensorType["b", "n_face", bool]
+            Boolean masks used to separate actual faces from paddings. Actual faces have
+            corresponding face mask values being 1.
+        edge_masks : TensorType["b", "n_edge", bool]
+            Boolean masks used to separate actual edges from paddings.
+
+        Returns
+        -------
+        codes : TensorType["b", "n_face", -1, int]
+            Batch of face codebook code sequences. The number of code depends on the
+            number of quantizers in the RQ-VAE. Specifically, it will be ``3 * n_quant``.
+        """
+        mode = self.training
+        self.eval()
+
+        faces = faces.masked_fill(~face_masks.unsqueeze(-1), 0)
+        index = torch.arange(vertices.size(0), device=vertices.device)[:, None, None]
+
+        coords = vertices[index, faces]
+        embeds = self.embedding(coords, face_masks, edges, edge_masks)
+        _, codes, _ = self.encoder(faces, embeds, face_masks)
+
+        self.train(mode)
+        return codes
 
     @torch.no_grad()
     def decode(
         self,
-    ):
-        pass
+        codes: TensorType["b", "n_face", -1, int],
+        face_masks: TensorType["b", "n_face", bool] | None = None,
+        return_quantized: bool = False,
+    ) -> TensorType["b", "n_face", 3, 3, float] | TensorType["b", "n_face", 3, 3, int]:
+        r"""Decode VQ-VAE codebook codes into mesh face vertex coordinates.
+
+        Parameters
+        ----------
+        codes : TensorType["b", "n_face", -1, int]
+            Batch of face embedding codes
+        face_masks : TensorType["b", "n_face", bool] | None, default=None
+            Boolean masks used to separate actual faces from paddings. Actual faces have
+            corresponding face mask values being 1. If not set, all codes are treated as
+            regular faces instead of padding.
+        return_quantized : bool, default=False
+            Set to ``True`` to return quantized coordinate indices instead of continuous values.
+
+        Returns
+        -------
+        coords : TensorType["b", "n_face", 3, 3, float] | TensorType["b", "n_face", 3, 3, int]
+            Predicted coordinates decoded from input codes. If ``return_quantized`` is set
+            to true, the quantized coordinate indices will be returned instead of continuous
+            x-y-z coordinate values.
+        """
+        mode = self.training
+        self.eval()
+
+        B, T, _ = codes.size()
+        if face_masks is None:
+            face_masks = torch.ones((B, T), device=codes.device, dtype=bool)
+
+        embeds = self.encoder.quantizer.get_output_from_indices(codes)
+        coords = rearrange(
+            self.decoder(embeds, face_masks).argmax(-1),
+            "b t (v r) -> b t v r",
+            v=3,
+            c=3,
+        )
+
+        self.train(mode)
+        if return_quantized:
+            return coords
+
+        config = self.feature_configs["vrtx"]
+        coords = dequantize(coords, high_low=config.high_low, num_bins=config.num_bins)
+
+        # Mask out padding faces with NaN
+        coords = coords.masked_fill_(
+            ~rearrange(face_masks, "b t -> b t 1 1"), float("nan")
+        )
+        return coords

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from meshae.typing import MeshAEFeatNameType
+from meshae.typing import MeshAEFeatNameType
 
 
 @dataclass
@@ -34,7 +32,7 @@ class MeshAEFeatEmbedConfig:
 
 @dataclass
 class MeshAEModelConfig:
-    r"""Configurations for auto-encoder model initialization. 
+    r"""Configurations for auto-encoder model initialization.
 
     Parameters
     ----------
