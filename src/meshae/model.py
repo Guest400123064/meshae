@@ -12,12 +12,12 @@ from torch_geometric.nn.conv import SAGEConv
 from vector_quantize_pytorch import ResidualVQ
 from x_transformers import Encoder
 
-from meshae.config import MeshAEFeatEmbedConfig
 from meshae.utils import gaussian_blur1d, quantize
 
 if TYPE_CHECKING:
     from torchtyping import TensorType
 
+    from meshae.config import MeshAEFeatEmbedConfig
     from meshae.typing import MeshAEFeatNameType, b, n_edge, n_face, n_vrtx
 
 
