@@ -51,3 +51,6 @@ pyrr = "^0.10.3"
 
 [tool.poetry.group.data.dependencies]
 objaverse = "^0.1.7"
+
+[tool.ruff.lint]
+ignore = ["F401"]

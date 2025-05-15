@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -17,9 +17,8 @@ from meshae.utils import gaussian_blur1d, quantize
 
 if TYPE_CHECKING:
     from torchtyping import TensorType
-    from meshae.utils import b, n_edge, n_face, n_vrtx
 
-MeshAEFeatNameType = Literal["area", "norm", "acos", "vrtx"]
+    from meshae.typing import MeshAEFeatNameType, b, n_edge, n_face, n_vrtx
 
 
 class MeshAEEmbedding(nn.Module):
@@ -705,13 +704,13 @@ class MeshAEModel(nn.Module):
         recon_loss = (-coords * logits).sum(1)[face_masks].mean()
         return recon_loss
 
-    @torch.no_grad
+    @torch.no_grad()
     def encode(
         self,
     ):
         pass
 
-    @torch.no_grad
+    @torch.no_grad()
     def decode(
         self,
     ):

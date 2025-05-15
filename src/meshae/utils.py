@@ -13,10 +13,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
     from torchtyping import TensorType
 
-b = None
-n_edge = None
-n_face = None
-n_vrtx = None
+    from meshae.typing import b, n_edge, n_face, n_vrtx
 
 
 def quantize(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import torch
 import trimesh
@@ -17,7 +17,7 @@ from meshae.utils import (
 if TYPE_CHECKING:
     from torchtyping import TensorType
 
-MeshAEDatumKeyType = Literal["vertex", "face", "edge", "face_masks", "edge_masks"]
+    from meshae.typing import MeshAEDatumKeyType
 
 
 class MeshAEDataset(Dataset):
