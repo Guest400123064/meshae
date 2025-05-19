@@ -11,19 +11,29 @@ if TYPE_CHECKING:
     from meshae.typing import MeshAEDatumKeyType
 
 
-def batch_to(batch, device):
-    return {k: v.to(device, non_blocking=True) for k, v in batch.items()}
-
-
 class MeshAETrainer(Trainer):
-    r"""
-    """
+    r"""Trainer class for training management."""
 
     def calculate_train_batch_loss(
         self,
         batch: dict[MeshAEDatumKeyType, TensorType],
     ) -> dict[str, Any]:
-        r"""
+        r"""Custom forward pass and loss calculation.
+
+        We need to customize the forward pass because the loss calculation is embedded into the
+        model definition.
+
+        Parameters
+        ----------
+        batch : dict[MeshAEDatumKeyType, TensorType]
+            Batch of auto-encoder inputs collated into a single dictionary.
+
+        Returns
+        -------
+        loss : TensorType[(), float]
+            Combined loss (reconstruction loss and VQ-VQE commit loss) for auto-encoder training.
+        batch_size : int
+            Batch size.
         """
         loss, *_ = self.model(**batch)
         batch_size = batch["faces"].size(0)
@@ -34,7 +44,23 @@ class MeshAETrainer(Trainer):
         self,
         batch: dict[MeshAEDatumKeyType, TensorType],
     ) -> dict[str, Any]:
-        r"""
+        r"""Custom forward pass and loss calculation.
+
+        We need to customize the forward pass because the loss calculation is embedded into the
+        model definition. Further, for evaluation runs, we make sure that the model is in the
+        eval mode.
+
+        Parameters
+        ----------
+        batch : dict[MeshAEDatumKeyType, TensorType]
+            Batch of auto-encoder inputs collated into a single dictionary.
+
+        Returns
+        -------
+        loss : TensorType[(), float]
+            Combined loss (reconstruction loss and VQ-VQE commit loss) for auto-encoder training.
+        batch_size : int
+            Batch size.
         """
         mode = self.model.training
         self.model.eval()
