@@ -55,10 +55,10 @@ class MeshAECollateFn:
     ) -> dict[MeshAEDatumKeyType, TensorType]:
         r"""Custom collate function for vertices, faces, and face edges.
 
-        Padding values are configured through the dataset initialization parameters. For
-        faces and face edges, boolean masks will be created to help distinguish actual
-        inputs from padding values. No mask generated for vertices since there's no mixing
-        operation applied to vertices.
+        Padding values are configured through the initialization parameters. For faces and
+        face edges, boolean masks will be created to help distinguish actual inputs from
+        padding values. No mask generated for vertices since there's no mixing operation
+        applied to vertices.
 
         Parameters
         ----------
