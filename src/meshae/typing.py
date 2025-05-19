@@ -8,4 +8,4 @@ n_face = None
 n_vrtx = None
 
 MeshAEFeatNameType = Literal["area", "norm", "acos", "vrtx"]
-MeshAEDatumKeyType = Literal["vertex", "face", "edge", "face_masks", "edge_masks"]
+MeshAEDatumKeyType = Literal["vertices", "faces", "edges", "face_masks", "edge_masks"]
