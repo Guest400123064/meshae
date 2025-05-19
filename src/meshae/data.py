@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 import torch
 import trimesh
+from beartype import beartype
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
 
@@ -20,67 +21,35 @@ if TYPE_CHECKING:
     from meshae.typing import MeshAEDatumKeyType
 
 
-class MeshAEDataset(Dataset):
-    r""" """
+class MeshAECollateFn:
+    r"""A configurable collate function.
 
+    Parameters
+    ----------
+    vertex_padding_value : float, default=0.0
+        Padding value for vertex coordinate values.
+    face_padding_value : int, default=0
+        Padding vertex index for batch of faces. Setting to any valid index that does not
+        exceed the maximum number of vertices should be sufficient. Retrieved vertices will
+        be masked out.
+    edge_padding_value : int, default=0
+        Padding face index for batch of face edges. Setting to any valid index that does
+        not exceed the maximum number of faces should be sufficient. Retrieved faces will
+        be masked out.
+    """
+
+    @beartype
     def __init__(
         self,
-        path: Path,
-        *,
-        sort_face_by: str = "zxy",
-        include_self: bool = False,
         vertex_padding_value: float = 0.0,
-        face_padding_value: int = -1,
-        edge_padding_value: int = -1,
+        face_padding_value: int = 0,
+        edge_padding_value: int = 0,
     ) -> None:
-        super().__init__()
-
-        self.path = Path(path)
-        self.objects = list(self.path.glob("*.glb"))
-        if len(self.objects) == 0:
-            msg = f"No '.glb' object found under directory <{str(path)}>."
-            raise RuntimeError(msg)
-
-        self.sort_face_by = sort_face_by
-        self.include_self = include_self
-
         self.vertex_padding_value = vertex_padding_value
         self.face_padding_value = face_padding_value
         self.edge_padding_value = edge_padding_value
 
-    def __len__(self) -> int:
-        return len(self.objects)
-
-    def __getitem__(self, idx: int) -> dict:
-        return self.load_and_process(self.objects[idx])
-
-    def load_and_process(self, path: Path) -> dict[MeshAEDatumKeyType, TensorType]:
-        r"""Load and normalize a single mesh object from given path.
-
-        Parameters
-        ----------
-        path : pathlib.Path
-            Path to the source mesh object.
-
-        Returns
-        -------
-        faces : TensorType["n_face", 3, int]
-            Face tensor.
-        edges : TensorType["n_edge", 2, int]
-            Face edge tensor.
-        vertices : TensorType["n_vrtx", 3, 3, float]
-            Vertex tensor.
-        """
-        mesh = trimesh.load(path, file_type="glb", force="mesh", process=False)
-        mesh, _, _ = compute_normalized_mesh(mesh)
-
-        vertices = torch.from_numpy(mesh.vertices)
-        faces = compute_sorted_faces(mesh, by=self.sort_face_by, return_tensor=True)
-        edges = compute_face_edges(faces, include_self=self.include_self)
-
-        return {"faces": faces, "edges": edges, "vertices": vertices}
-
-    def collate_fn(
+    def __call__(
         self,
         data: list[dict[MeshAEDatumKeyType, TensorType]],
     ) -> dict[MeshAEDatumKeyType, TensorType]:
@@ -134,3 +103,57 @@ class MeshAEDataset(Dataset):
             "edge_masks": edge_masks,
         }
         return batch
+
+
+class MeshAEDataset(Dataset):
+    r""" """
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        sort_face_by: str = "zxy",
+        include_self: bool = False,
+    ) -> None:
+        super().__init__()
+
+        self.path = Path(path)
+        self.objects = list(self.path.glob("*.glb"))
+        if len(self.objects) == 0:
+            msg = f"No '.glb' object found under directory <{str(path)}>."
+            raise RuntimeError(msg)
+
+        self.sort_face_by = sort_face_by
+        self.include_self = include_self
+
+    def __len__(self) -> int:
+        return len(self.objects)
+
+    def __getitem__(self, idx: int) -> dict:
+        return self.load_and_process(self.objects[idx])
+
+    def load_and_process(self, path: Path) -> dict[MeshAEDatumKeyType, TensorType]:
+        r"""Load and normalize a single mesh object from given path.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Path to the source mesh object.
+
+        Returns
+        -------
+        faces : TensorType["n_face", 3, int]
+            Face tensor.
+        edges : TensorType["n_edge", 2, int]
+            Face edge tensor.
+        vertices : TensorType["n_vrtx", 3, 3, float]
+            Vertex tensor.
+        """
+        mesh = trimesh.load(path, file_type="glb", force="mesh", process=False)
+        mesh, _, _ = compute_normalized_mesh(mesh)
+
+        vertices = torch.from_numpy(mesh.vertices)
+        faces = compute_sorted_faces(mesh, by=self.sort_face_by, return_tensor=True)
+        edges = compute_face_edges(faces, include_self=self.include_self)
+
+        return {"faces": faces, "edges": edges, "vertices": vertices}
