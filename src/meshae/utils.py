@@ -107,21 +107,13 @@ def create_mesh_from_face_vertices(
 
 def compute_face_edges(
     faces: TensorType["n_face", 3, int],
-    neighbor_if_share_one_vertex: bool = False,
-    include_self: bool = False,
 ) -> TensorType["b", "n_edge", 2, int]:
     r"""Compute face edges from a set of mesh faces.
-
-    TODO: If possible, we can create a pure NumPy version of this function.
 
     Parameters
     ----------
     faces : TensorType["n_face", 3, int]
         Mesh face sequences with each face represented by three vertex ids.
-    neighbor_if_share_one_vertex : bool, default=False
-        Set to ``True`` to consider faces only sharing a single vertex as neighbors.
-    include_self : bool, default=False
-        Whether include self as one of the neighbors.
 
     Returns
     -------
@@ -130,7 +122,7 @@ def compute_face_edges(
     """
     T, device = faces.size(0), faces.device
 
-    threshold = 2 - neighbor_if_share_one_vertex
+    threshold = 2
     all_edges = torch.stack(
         torch.meshgrid(
             torch.arange(T, device=device),
@@ -144,10 +136,7 @@ def compute_face_edges(
         faces, "t v -> 1 t 1 v"
     )
     vrtx_shared = vrtx_shared.any(-1).sum(-1)
-    is_neighbor = vrtx_shared >= threshold
-
-    if not include_self:
-        is_neighbor &= vrtx_shared != 3
+    is_neighbor = vrtx_shared == 2
 
     return all_edges[is_neighbor]
 

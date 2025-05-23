@@ -2,7 +2,7 @@ import numpy as np
 import torch
 
 from meshae import MeshAEFeatEmbedConfig, MeshAEModel
-from meshae.data import MeshAEDataset, MeshAECollateFn
+from meshae.dataset import MeshAEDataset, MeshAECollateFn
 from meshae.trainer import MeshAETrainer
 
 

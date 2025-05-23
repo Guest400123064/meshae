@@ -21,6 +21,50 @@ if TYPE_CHECKING:
     from meshae.typing import MeshAEDatumKeyType
 
 
+class MeshAEDataset(Dataset):
+    r"""Mesh auto-encoder training dataset.
+
+    Each object is loaded from disk on-demand. Loaded mesh will be normalized to center around the
+    origin and bounded by a bounding box with the long diagonal normalized to 1. Meshes in formats
+    other than ``.glb`` are ignored.
+
+    Parameters
+    ----------
+    path : str
+        String path to the data folder. The folder is assumed to be flattened, i.e., all ``.glb``
+        objects should residue in at the same depth.
+    sort_by : str, default="zyx"
+        The order of axis used to sort mesh faces. ``"zyx"`` indicates that the first vertex of a
+        processed face always have the lowest vertical coordinate. Then, faces from the same mesh
+        are sorted by the coordinates of the first vertices from all faces.
+    """
+
+    def __init__(self, path: str, sort_by: str = "zyx") -> None:
+        super().__init__()
+
+        self.path = Path(path)
+        self.sort_by = sort_by
+        self.objects = list(self.path.glob("*.glb"))
+        if len(self.objects) == 0:
+            msg = f"No '.glb' object found under directory <{path}>."
+            raise RuntimeError(msg)
+
+    def __len__(self) -> int:
+        return len(self.objects)
+
+    def __getitem__(self, idx: int) -> dict[MeshAEDatumKeyType, TensorType]:
+        mesh, _, _ = normalize_mesh(
+            trimesh.load(self.objects[idx], file_type="glb", force="mesh", process=False)
+        )
+        faces = sort_faces(mesh, by=self.sort_by, return_tensor=True)
+        datum = {
+            "faces": faces,
+            "edges": compute_face_edges(faces),
+            "vertices": torch.from_numpy(mesh.vertices),
+        }
+        return datum
+
+
 class MeshAECollateFn:
     r"""A configurable collate function.
 
@@ -103,38 +147,3 @@ class MeshAECollateFn:
             "edge_masks": edge_masks,
         }
         return batch
-
-
-class MeshAEDataset(Dataset):
-    def __init__(
-        self,
-        path: Path,
-        *,
-        sort_face_by: str = "zxy",
-        include_self: bool = False,
-    ) -> None:
-        super().__init__()
-
-        self.path = Path(path)
-        self.objects = list(self.path.glob("*.glb"))
-        if len(self.objects) == 0:
-            msg = f"No '.glb' object found under directory <{str(path)}>."
-            raise RuntimeError(msg)
-
-        self.sort_face_by = sort_face_by
-        self.include_self = include_self
-
-    def __len__(self) -> int:
-        return len(self.objects)
-
-    def __getitem__(self, idx: int) -> dict[MeshAEDatumKeyType, TensorType]:
-        mesh = trimesh.load(
-            self.objects[idx], file_type="glb", force="mesh", process=False
-        )
-        mesh, _, _ = normalize_mesh(mesh)
-
-        vertices = torch.from_numpy(mesh.vertices)
-        faces = sort_faces(mesh, by=self.sort_face_by, return_tensor=True)
-        edges = compute_face_edges(faces, include_self=self.include_self)
-
-        return {"faces": faces, "edges": edges, "vertices": vertices}
