@@ -129,10 +129,7 @@ class MeshAEDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict[MeshAEDatumKeyType, TensorType]:
         mesh = trimesh.load(
-            self.load_and_process(self.objects[idx]),
-            file_type="glb",
-            force="mesh",
-            process=False,
+            self.objects[idx], file_type="glb", force="mesh", process=False
         )
         mesh, _, _ = normalize_mesh(mesh)
 

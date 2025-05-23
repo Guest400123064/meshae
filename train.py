@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-from torch.utils.data import Subset
 
 from meshae import MeshAEFeatEmbedConfig, MeshAEModel
 from meshae.data import MeshAEDataset, MeshAECollateFn
@@ -29,8 +28,8 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-6)
 def main():
     collate_fn = MeshAECollateFn()
 
-    ds_train = Subset(MeshAEDataset("data/objaverse/train/"), np.arange(256))
-    ds_valid = Subset(MeshAEDataset("data/objaverse/valid/"), np.arange(32))
+    ds_train = MeshAEDataset("data/objaverse/train/")
+    ds_valid = MeshAEDataset("data/objaverse/valid/")
 
     trainer = MeshAETrainer(
         model=model, loss_func=None, optimizer=optimizer,
