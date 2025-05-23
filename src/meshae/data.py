@@ -11,8 +11,8 @@ from torch.utils.data import Dataset
 
 from meshae.utils import (
     compute_face_edges,
-    compute_normalized_mesh,
-    compute_sorted_faces,
+    normalize_mesh,
+    sort_faces,
 )
 
 if TYPE_CHECKING:
@@ -106,8 +106,6 @@ class MeshAECollateFn:
 
 
 class MeshAEDataset(Dataset):
-    r""" """
-
     def __init__(
         self,
         path: Path,
@@ -129,31 +127,17 @@ class MeshAEDataset(Dataset):
     def __len__(self) -> int:
         return len(self.objects)
 
-    def __getitem__(self, idx: int) -> dict:
-        return self.load_and_process(self.objects[idx])
-
-    def load_and_process(self, path: Path) -> dict[MeshAEDatumKeyType, TensorType]:
-        r"""Load and normalize a single mesh object from given path.
-
-        Parameters
-        ----------
-        path : pathlib.Path
-            Path to the source mesh object.
-
-        Returns
-        -------
-        faces : TensorType["n_face", 3, int]
-            Face tensor.
-        edges : TensorType["n_edge", 2, int]
-            Face edge tensor.
-        vertices : TensorType["n_vrtx", 3, 3, float]
-            Vertex tensor.
-        """
-        mesh = trimesh.load(path, file_type="glb", force="mesh", process=False)
-        mesh, _, _ = compute_normalized_mesh(mesh)
+    def __getitem__(self, idx: int) -> dict[MeshAEDatumKeyType, TensorType]:
+        mesh = trimesh.load(
+            self.load_and_process(self.objects[idx]),
+            file_type="glb",
+            force="mesh",
+            process=False,
+        )
+        mesh, _, _ = normalize_mesh(mesh)
 
         vertices = torch.from_numpy(mesh.vertices)
-        faces = compute_sorted_faces(mesh, by=self.sort_face_by, return_tensor=True)
+        faces = sort_faces(mesh, by=self.sort_face_by, return_tensor=True)
         edges = compute_face_edges(faces, include_self=self.include_self)
 
         return {"faces": faces, "edges": edges, "vertices": vertices}

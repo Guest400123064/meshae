@@ -127,7 +127,7 @@ def compute_face_edges(
     return all_edges[is_neighbor]
 
 
-def compute_sorted_faces(
+def sort_faces(
     mesh: trimesh.Trimesh,
     by: str = "zxy",
     return_tensor: bool = True,
@@ -189,7 +189,7 @@ def compute_sorted_faces(
     return sorted_faces
 
 
-def compute_normalized_mesh(
+def normalize_mesh(
     mesh: trimesh.Trimesh,
     scale: float = 0.95,
 ) -> tuple[trimesh.Trimesh, NDArray[np.float32], float]:
