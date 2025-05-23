@@ -80,6 +80,31 @@ def gaussian_blur1d(
     return rearrange(tensor, "... c n -> ... n c")
 
 
+def create_mesh_from_face_vertices(
+    face_vertices: TensorType["n_face", 3, 3, float],
+) -> trimesh.Trimesh:
+    r"""Restore tri-mesh object from face vertices.
+
+    Parameters
+    ----------
+    face_vertices : TensorType["n_face", 3, 3, float]
+        Face vertices.
+
+    Returns
+    -------
+    mesh : trimesh.Trimesh
+        Restored tri-mesh object.
+    """
+    vertices, faces = np.unique(
+        face_vertices.cpu().numpy().reshape(-1, 3),
+        axis=0,
+        return_inverse=True,
+    )
+    mesh = trimesh.Trimesh(vertices, faces=faces.reshape(-1, 3))
+
+    return mesh
+
+
 def compute_face_edges(
     faces: TensorType["n_face", 3, int],
     neighbor_if_share_one_vertex: bool = False,
