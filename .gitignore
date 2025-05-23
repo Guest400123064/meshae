@@ -174,7 +174,7 @@ cython_debug/
 .vscode/
 
 # Large dataset
-data/
+data/**/*.glb
 
 # Cached packages
 dependencies/
