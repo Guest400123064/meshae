@@ -67,7 +67,7 @@ class MeshAEModelConfig:
         equivalent to deterministic code retrieval [3]_.
     commitment_weight : float, default=1.0
         The weighting parameter for the VQ-VAE commitment loss term.
-    bin_smooth_blur_sigma : float, default=0.4
+    bin_smooth_blur_sigma : float, default=0.0
         Gaussian blur sigma parameter used to smooth the quantized, one-hot encoded coordinates
         for reconstruction loss calculation [2]_.
 
@@ -95,4 +95,4 @@ class MeshAEModelConfig:
     num_refiner_heads: int = 8
     sample_codebook_temp: float = 0.1
     commitment_weight: float = 1.0
-    bin_smooth_blur_sigma: float = 0.4
+    bin_smooth_blur_sigma: float = 0.0

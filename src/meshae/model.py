@@ -558,7 +558,7 @@ class MeshAEModel(nn.Module):
         num_refiner_heads: int = 8,
         sample_codebook_temp: float = 0.1,
         commitment_weight: float = 1.0,
-        bin_smooth_blur_sigma: float = 0.4,
+        bin_smooth_blur_sigma: float = 0.0,
     ) -> None:
         super().__init__()
 
