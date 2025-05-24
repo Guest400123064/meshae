@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 
 from meshae.typing import MeshAEFeatNameType
 
@@ -36,7 +36,7 @@ class MeshAEModelConfig:
 
     Parameters
     ----------
-    feature_configs : list[MeshAEFeatureConfig]
+    feature_configs : dict[MeshAEFeatNameType, MeshAEFeatureConfig]
         Configurations for how to quantize and embed features extracted from faces. Please
         refer to ``MeshAEFeatureConfig`` for more details.
     codebook_size : int, default=256
@@ -96,3 +96,14 @@ class MeshAEModelConfig:
     sample_codebook_temp: float = 0.1
     commitment_weight: float = 1.0
     bin_smooth_blur_sigma: float = 0.0
+
+    def asdict(self):
+        if not is_dataclass(self):
+            raise TypeError(f"This mixin is dataclass-only, which {type(self)} isn't.")
+        return {field.name: getattr(self, field.name) for field in fields(self)}
+
+    def __post_init__(self):
+        self.feature_configs = {
+            name: MeshAEFeatEmbedConfig(**cfg)
+            for name, cfg in self.feature_configs.items()
+        }

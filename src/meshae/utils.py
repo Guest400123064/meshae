@@ -121,8 +121,6 @@ def compute_face_edges(
         Edges capturing the topological relationship between mesh faces.
     """
     T, device = faces.size(0), faces.device
-
-    threshold = 2
     all_edges = torch.stack(
         torch.meshgrid(
             torch.arange(T, device=device),

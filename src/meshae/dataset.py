@@ -54,7 +54,9 @@ class MeshAEDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict[MeshAEDatumKeyType, TensorType]:
         mesh, _, _ = normalize_mesh(
-            trimesh.load(self.objects[idx], file_type="glb", force="mesh", process=False)
+            trimesh.load(
+                self.objects[idx], file_type="glb", force="mesh", process=False
+            )
         )
         faces = sort_faces(mesh, by=self.sort_by, return_tensor=True)
         datum = {

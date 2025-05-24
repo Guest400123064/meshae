@@ -1,9 +1,35 @@
+from __future__ import annotations
+
+import argparse
+
 import numpy as np
 import torch
 
 from meshae import MeshAEFeatEmbedConfig, MeshAEModel
 from meshae.dataset import MeshAEDataset, MeshAECollateFn
 from meshae.trainer import MeshAETrainer
+
+
+def get_args() -> argparse.Namespace:
+    pass
+
+
+def main(args):
+    collate_fn = MeshAECollateFn()
+
+    ds_train = MeshAEDataset("data/objaverse/train/")
+    ds_valid = MeshAEDataset("data/objaverse/valid/")
+
+    trainer = MeshAETrainer(
+        model=model, loss_func=None, optimizer=optimizer,
+    )
+    trainer.train(
+        train_dataset=ds_train,
+        eval_dataset=ds_valid,
+        num_epochs=2,
+        per_device_batch_size=8,
+        collate_fn=collate_fn,
+    )
 
 
 feat_configs = {
@@ -23,24 +49,6 @@ model = MeshAEModel(
 ).to("cuda:0")
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-6)
-
-
-def main():
-    collate_fn = MeshAECollateFn()
-
-    ds_train = MeshAEDataset("data/objaverse/train/")
-    ds_valid = MeshAEDataset("data/objaverse/valid/")
-
-    trainer = MeshAETrainer(
-        model=model, loss_func=None, optimizer=optimizer,
-    )
-    trainer.train(
-        train_dataset=ds_train,
-        eval_dataset=ds_valid,
-        num_epochs=2,
-        per_device_batch_size=8,
-        collate_fn=collate_fn,
-    )
 
 
 if __name__ == "__main__":

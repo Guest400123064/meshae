@@ -297,6 +297,7 @@ class MeshAEEncoder(nn.Module):
             stochastic_sample_codes=True,
             sample_codebook_temp=sample_codebook_temp,
             commitment_weight=commitment_weight,
+            ema_update=True,
         )
 
     def forward(
@@ -495,7 +496,7 @@ class MeshAEModel(nn.Module):
 
     Parameters
     ----------
-    feature_configs : list[MeshAEFeatureConfig]
+    feature_configs : dict[MeshAEFeatNameType, MeshAEFeatureConfig]
         Configurations for how to quantize and embed features extracted from faces. Please
         refer to ``MeshAEFeatureConfig`` for more details.
     codebook_size : int, default=256
