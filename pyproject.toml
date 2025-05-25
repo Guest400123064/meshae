@@ -19,6 +19,7 @@ dependencies = [
     "torchtyping (>=0.1.5,<0.2.0)",
     "pytorch-accelerated (>=0.1.52,<0.2.0)",
     "torch-geometric (>=2.6.1,<3.0.0)",
+    "easydict (>=1.13,<2.0)",
 ]
 
 [build-system]
