@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields, is_dataclass
+from typing import Any
 
 from meshae.typing import MeshAEFeatNameType
 
@@ -97,7 +98,11 @@ class MeshAEModelConfig:
     commitment_weight: float = 1.0
     bin_smooth_blur_sigma: float = 0.0
 
-    def asdict(self):
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "MeshAEModelConfig":
+        return cls(**d)
+
+    def to_dict(self):
         if not is_dataclass(self):
             raise TypeError(f"This mixin is dataclass-only, which {type(self)} isn't.")
         return {field.name: getattr(self, field.name) for field in fields(self)}

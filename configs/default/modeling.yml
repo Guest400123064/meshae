@@ -1,4 +1,9 @@
-dataset:
+train_dataset:
+  path: data/objaverse/train
+  sort_by: zyx
+
+eval_dataset:
+  path: data/objaverse/valid
   sort_by: zyx
 
 collate_fn:
@@ -42,6 +47,10 @@ model:
 optimizer:
   lr: 0.0001
   betas: [0.9, 0.99]
+
+checkpoint:
+  save_path: checkpoints/default/best.pt
+  watch_metric: eval_loss_epoch
 
 train:
   num_epochs: 2
