@@ -65,14 +65,17 @@ def init_data_args(
     If validation configuration is not provided, a random subsample of 2048 training samples
     will be used as the validation set for evaluation and checkpointing.
     """
-    ds_train = MeshAEDataset(**config["train"])
+    ret = {
+        "collate_fn": MeshAECollateFn(**config["collate_fn"]),
+        "train_dataset": MeshAEDataset(**config["train"]),
+    }
     if "eval" in config.keys():
-        ds_eval = MeshAEDataset(**config["eval"])
-        return ds_train, ds_eval
+        ret["eval_dataset"] = MeshAEDataset(**config["eval"])
+        return ret
 
-    indices = torch.randperm(len(ds_train))[:2048]
-    ds_eval = Subset(ds_train, indices)
-    return ds_train, ds_eval
+    indices = torch.randperm(len(ret["train_dataset"]))[:2048]
+    ret["eval_dataset"] = Subset(ret["train_dataset"], indices)
+    return ret
 
 
 def init_random_model(model_config: str | Path) -> MeshAEModel:
