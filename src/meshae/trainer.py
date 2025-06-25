@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 from pytorch_accelerated import Trainer
+from pytorch_accelerated.callbacks import TrainerCallback, LogMetricsCallback
 
 if TYPE_CHECKING:
     from torchtyping import TensorType
@@ -71,3 +72,11 @@ class MeshAETrainer(Trainer):
 
         self.model.train(mode)
         return {"loss": loss, "batch_size": batch_size}
+
+
+class MeshAECheckpointCallback(TrainerCallback):
+    r""""""
+
+
+class MeshAELoggerCallback(LogMetricsCallback):
+    r""""""
