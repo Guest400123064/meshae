@@ -1,0 +1,38 @@
+{
+    "feature_configs": {
+        "vrtx": {
+            "embedding_dim": 128,
+            "num_bins": 128,
+            "high_low": [0.5, -0.5]
+        },
+        "acos": {
+            "embedding_dim": 128,
+            "num_bins": 128,
+            "high_low": [3.141592653589792826, 0.0]
+        },
+        "norm": {
+            "embedding_dim": 128,
+            "num_bins": 128,
+            "high_low": [1.0, -1.0]
+        },
+        "area": {
+            "embedding_dim": 128,
+            "num_bins": 128,
+            "high_low": [1.0, 0.0]
+        }
+    },
+    "codebook_size": 256,
+    "hidden_size": 512,
+    "num_sageconv_layers": 1,
+    "num_encoder_layers": 4,
+    "num_encoder_heads": 8,
+    "num_quantizers": 2,
+    "num_codebook_codes": 16384,
+    "num_decoder_layers": 2,
+    "num_decoder_heads": 8,
+    "num_refiner_layers": 2,
+    "num_refiner_heads": 8,
+    "sample_codebook_temp": 0.1,
+    "commitment_weight": 1.0,
+    "bin_smooth_blur_sigma": 0.0
+}

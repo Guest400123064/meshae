@@ -1,0 +1,24 @@
+data:
+  train:
+    path: data/objaverse/train
+    sort_by: zyx
+  validation:
+    path: data/objaverse/valid
+    sort_by: zyx
+
+collate_fn:
+  vertex_padding_value: 0.0
+  face_padding_value: 0
+  edge_padding_value: 0
+
+optimizer:
+  lr: 1e-4
+  betas: [0.9, 0.99]
+
+checkpoint:
+  path: checkpoints/default
+  watch_metric: eval_loss_epoch
+
+run:
+  num_epochs: 2
+  per_device_batch_size: 8
