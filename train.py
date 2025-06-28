@@ -60,10 +60,32 @@ def parse_cli_args() -> argparse.Namespace:
 def init_data_args(
     config: dict[Literal["dataset", "collate_fn"], Any],
 ) -> tuple[MeshAEDataset, MeshAEDataset | Subset]:
-    r"""Initialize datasets for training and validation.
+    r"""Initialize data arguments for the training loop.
 
-    If validation configuration is not provided, a random subsample of 2048 training samples
-    will be used as the validation set for evaluation and checkpointing.
+    Data arguments (returned as dictionary) include:
+
+    - Collate function
+    - Training dataset
+    - Eval dataset
+
+    If the eval dataset is not configured, a random 8192 examples
+    will be sampled from the training dataset, used as validation
+    samples for checkpointing etc.
+
+    Parameters
+    ----------
+    config : dict[Literal["dataset", "collate_fn"], Any]
+        Model training specifications.
+
+    Returns
+    -------
+    collate_fn : MeshAECollateFn
+        The batch collation function configured based on training
+        specifications.
+    train_dataset : MeshAEDataset
+        The training samples.
+    eval_dataset : MeshAEDataset
+        The evaluation samples.
     """
     ret = {
         "collate_fn": MeshAECollateFn(**config["collate_fn"]),
@@ -73,16 +95,14 @@ def init_data_args(
         ret["eval_dataset"] = MeshAEDataset(**config["eval"])
         return ret
 
-    indices = torch.randperm(len(ret["train_dataset"]))[:2048]
+    indices = torch.randperm(len(ret["train_dataset"]))[:8192]
     ret["eval_dataset"] = Subset(ret["train_dataset"], indices)
     return ret
 
 
 def init_random_model(model_config: str | Path) -> MeshAEModel:
-    r"""Initialize a model with randomized weight given model specifications.
+    r"""Initialize a model with randomized weight given specifications."""
 
-    An error will be raised if the provided model config file does not exists.
-    """
     model_config = Path(model_config)
     if not model_config.exists():
         msg = f"Model config at <{model_config}> not found; default model initialized."
