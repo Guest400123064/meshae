@@ -42,13 +42,13 @@ def parse_cli_args() -> argparse.Namespace:
         help="Path to the training specifications, e.g., the number of epochs.",
     )
     parser.add_argument(
-        "--ckpt-path", "-cp",
+        "--ckpt-path",
         type=str,
         required=True,
         help="Path to the directory storing model checkpoints.",
     )
     parser.add_argument(
-        "--ckpt-freq", "-cf",
+        "--ckpt-freq",
         type=int,
         default=-1,
         required=False,
