@@ -9,6 +9,7 @@ from typing import Any, Literal
 import torch
 from torch.utils.data import Subset
 from pytorch_accelerated.callbacks import get_default_callbacks
+from pytorch_accelerated.schedulers import CosineLrScheduler
 
 from meshae import MeshAEModel, MeshAEModelConfig
 from meshae.dataset import MeshAEDataset, MeshAECollateFn
@@ -124,6 +125,7 @@ def main():
 
     model = init_random_model(args.model_config)
     optimizer = torch.optim.AdamW(model.parameters(), **train_config["optimizer"])
+    scheduler = CosineLrScheduler.create_scheduler_fn(**train_config["scheduler"])
 
     trainer = MeshAETrainer(
         model,
@@ -137,7 +139,7 @@ def main():
         ),
     )
     trainer.train(
-        create_scheduler_fn=None,
+        create_scheduler_fn=scheduler,
         **init_data_args(train_config),
         **train_config["train"],
     )
