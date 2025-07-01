@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -86,11 +87,19 @@ class MeshAECheckpointCallback(TrainerCallback):
     - Granular checkpointing frequency: when training the model with a large dataset, we
     may only train the model for one epoch. So, we may want to set a frequency based on
     number of iterations.
-    - More 
+    - More informative checkpoint name: instead of having a fixed binary file one would
+    want to have the naming reflect the number of epochs and number of completed iters.
     """
 
     def __init__(
         self,
+        save_path: str | Path,
+        watch_metric: str = "eval_loss_epoch",
+        greater_is_better: bool = False,
+        reset_on_train: bool = True,
+        save_optimizer: bool = True,
+        save_scheduler: bool = True,
+        load_saved_checkpoint: bool = True,
     ) -> None:
         pass
 
