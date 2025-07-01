@@ -102,8 +102,11 @@ def init_data_args(
 
 
 def init_random_model(model_config: str | Path) -> MeshAEModel:
-    r"""Initialize a model with randomized weight given specifications."""
+    r"""Initialize a model with randomized weight given specifications.
 
+    Model specification is expected to be stored in a JSON file. An error will
+    be raised if the provided path does not exist.
+    """
     model_config = Path(model_config)
     if not model_config.exists():
         msg = f"Model config at <{model_config}> not found; default model initialized."

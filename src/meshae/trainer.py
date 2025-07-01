@@ -75,7 +75,24 @@ class MeshAETrainer(Trainer):
 
 
 class MeshAECheckpointCallback(TrainerCallback):
-    r""""""
+    r"""Save a more comprehensive checkpoint on a more granular basis.
+
+    The ``pytorch_accelerated`` package comes with ``SaveBestModelCallback`` callback
+    that can handle simpler checkpointing behavior. Specifically, it saves a ``best.pt``
+    file after the end of each training epoch based on the evaluation loss (or any other
+    specified metric value). This class aim at a more flexible checkpointing behavior
+    enabling:
+
+    - Granular checkpointing frequency: when training the model with a large dataset, we
+    may only train the model for one epoch. So, we may want to set a frequency based on
+    number of iterations.
+    - More 
+    """
+
+    def __init__(
+        self,
+    ) -> None:
+        pass
 
 
 class MeshAELoggerCallback(LogMetricsCallback):
