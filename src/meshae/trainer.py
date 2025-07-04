@@ -17,6 +17,47 @@ if TYPE_CHECKING:
 class MeshAETrainer(Trainer):
     r"""Trainer class for training management."""
 
+    @property
+    def current_step(self) -> int:
+        r"""Number of times model parameters are updated **within an epoch**."""
+
+        return self._current_step
+
+    def train_epoch_start(self):
+        r"""Initialize a iteration counter on epoch start.
+
+        Note that the current step is different from the number of forward steps. Instead,
+        it records the number of times the parameters are updated. Therefore, the counter
+        should be updated only when ``optimizer_step`` is invoked. 
+        """
+        super().train_epoch_start()
+
+        self._current_step = 0
+
+    def optimizer_step(self) -> None:
+        r"""Override the optimizer step to enable interim checkpointing.
+
+        There are two reasons to override the default optimizer step:
+
+        - Increment the iteration counter.
+        - Save checkpoint accordingly.
+
+        Note that checkpointing will be passed over to the scheduler step if the scheduler is
+        available to make sure the optimizer and scheduler states are synchronized.
+        """
+        super().optimizer_step()
+
+        self._current_step += 1
+        if self.scheduler is None:
+            self.callback_handler.call_event("save_checkpoint_on_invoke", self)
+
+    def scheduler_step(self):
+        r"""Include a checkpointing step."""
+
+        super().scheduler_step()
+
+        self.callback_handler.call_event("save_checkpoint_on_invoke", self)
+
     def calculate_train_batch_loss(
         self,
         batch: dict[MeshAEDatumKeyType, TensorType],
@@ -139,11 +180,17 @@ class MeshAECheckpointCallback(TrainerCallback):
         self.save_scheduler = save_scheduler
         self.load_saved_checkpoint = load_saved_checkpoint
 
+    def save_checkpoint_on_invoke(self, trainer):
+        pass
+
+    def on_training_run_epoch_end(self, trainer, **kwargs):
+        return
+
     def on_training_run_start(self, trainer, **kwargs):
         if self.reset_on_train:
             self.best_metric = None
 
-    def on_training_run_epoch_end(self, trainer, **kwargs):
+    def on_training_run_end(self, trainer, **kwargs):
         if self.load_saved_checkpoint:
             trainer.print(
                 f"Loading checkpoint with {self.watch_metric}: {self.best_metric} "
