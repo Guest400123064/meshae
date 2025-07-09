@@ -90,10 +90,10 @@ def init_data_args(
     """
     ret = {
         "collate_fn": MeshAECollateFn(**config["collate_fn"]),
-        "train_dataset": MeshAEDataset(**config["train"]),
+        "train_dataset": MeshAEDataset(**config["dataset"]["train"]),
     }
     if "eval" in config.keys():
-        ret["eval_dataset"] = MeshAEDataset(**config["eval"])
+        ret["eval_dataset"] = MeshAEDataset(**config["dataset"]["eval"])
         return ret
 
     indices = torch.randperm(len(ret["train_dataset"]))[:8192]
