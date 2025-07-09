@@ -165,18 +165,19 @@ class MeshAECheckpointCallback(TrainerCallback):
             self.save_path.mkdir(parents=True, exist_ok=True)
 
     def make_checkpoint_full_path(self, trainer: MeshAETrainer) -> str:
-        ce = trainer.run_history.current_epoch
-        cs = trainer.current_step
+        ce = trainer.run_history.current_epoch + 1
+        cs = trainer.current_step + 1
         fn = f"ckpt-{ce:02}-{cs:04}.pt"
 
         return str(self.save_path / fn)
 
     def save_checkpoint_on_invoke(self, trainer: MeshAETrainer) -> None:
-        trainer.save_checkpoint(
-            save_path=self.make_checkpoint_full_path(trainer),
-            save_optimizer=self.save_optimizer,
-            save_scheduler=self.save_scheduler,
-        )
+        if (trainer.current_step + 1) % self.checkpoint_frequency == 0:
+            trainer.save_checkpoint(
+                save_path=self.make_checkpoint_full_path(trainer),
+                save_optimizer=self.save_optimizer,
+                save_scheduler=self.save_scheduler,
+            )
 
 
 class MeshAELoggerCallback(LogMetricsCallback):
