@@ -2,18 +2,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import yaml
 from pathlib import Path
 from typing import Any, Literal
 
 import torch
-from torch.utils.data import Subset
-from pytorch_accelerated.callbacks import get_default_callbacks
+import yaml
+from pytorch_accelerated.callbacks import SaveBestModelCallback, get_default_callbacks
 from pytorch_accelerated.schedulers import CosineLrScheduler
+from torch.utils.data import Subset
 
 from meshae import MeshAEModel, MeshAEModelConfig
-from meshae.dataset import MeshAEDataset, MeshAECollateFn
-from meshae.trainer import MeshAETrainer, MeshAECheckpointCallback
+from meshae.dataset import MeshAECollateFn, MeshAEDataset
+from meshae.trainer import MeshAECheckpointCallback, MeshAETrainer
 
 
 def parse_cli_args() -> argparse.Namespace:
@@ -52,7 +52,7 @@ def parse_cli_args() -> argparse.Namespace:
         type=int,
         default=-1,
         required=False,
-        help="",
+        help="Checkpointing frequency in number of iterations.",
     )
     args = parser.parse_args()
     return args
