@@ -144,6 +144,7 @@ def main():
     )
     trainer.train(
         create_scheduler_fn=scheduler,
+        train_dataloader_kwargs={"pin_memory": True, "num_workers": 8},
         **init_data_args(train_config),
         **train_config["train"],
     )
