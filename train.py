@@ -120,8 +120,6 @@ def init_random_model(model_config: str | Path) -> MeshAEModel:
 
 
 def main():
-    r""""""
-
     args = parse_cli_args()
     with open(args.train_config) as fin:
         train_config = yaml.safe_load(fin)
@@ -130,14 +128,17 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), **train_config["optimizer"])
     scheduler = CosineLrScheduler.create_scheduler_fn(**train_config["scheduler"])
 
+    ckpt_path = Path(args.ckpt_path)
+    ckpt_callback_freq = MeshAECheckpointCallback(ckpt_path, args.ckpt_freq)
+    ckpt_callback_best = SaveBestModelCallback(str(ckpt_path / "champion.pt"))
+
     trainer = MeshAETrainer(
         model,
         loss_func=None,
         optimizer=optimizer,
         callbacks=(
-            MeshAECheckpointCallback(
-                args
-            ),
+            ckpt_callback_freq,
+            ckpt_callback_best,
             *get_default_callbacks(),
         ),
     )
