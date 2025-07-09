@@ -165,7 +165,7 @@ class MeshAECheckpointCallback(TrainerCallback):
             self.save_path.mkdir(parents=True, exist_ok=True)
 
     def make_checkpoint_full_path(self, trainer: MeshAETrainer) -> str:
-        ce = trainer.run_history.current_epoch + 1
+        ce = trainer.run_history.current_epoch
         cs = trainer.current_step + 1
         fn = f"ckpt-{ce:02}-{cs:04}.pt"
 
