@@ -42,21 +42,24 @@ def parse_cli_args() -> argparse.Namespace:
         help="Path to the training specifications, e.g., the number of epochs.",
     )
     parser.add_argument(
-        "--ckpt-path",
+        "--checkpoint-path",
         type=str,
         required=True,
         help="Path to the directory storing model checkpoints.",
     )
     parser.add_argument(
-        "--ckpt-freq",
+        "--checkpoint-frequency",
         type=int,
         default=-1,
         required=False,
         help="Checkpointing frequency in number of iterations.",
     )
     parser.add_argument(
-        "--eval-freq",
-        
+        "--eval-frequency",
+        type=int,
+        default=100,
+        required=False,
+        help="Evaluation frequency in number of iterations.",
     )
     args = parser.parse_args()
     return args
@@ -132,9 +135,9 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), **train_config["optimizer"])
     scheduler = CosineLrScheduler.create_scheduler_fn(**train_config["scheduler"])
 
-    ckpt_path = Path(args.ckpt_path)
-    ckpt_callback_freq = MeshAECheckpointCallback(ckpt_path, args.ckpt_freq)
-    ckpt_callback_best = SaveBestModelCallback(str(ckpt_path / "champion.pt"))
+    checkpoint_path = Path(args.checkpoint_path)
+    ckpt_callback_freq = MeshAECheckpointCallback(checkpoint_path, args.checkpoint_frequency)
+    ckpt_callback_best = SaveBestModelCallback(str(checkpoint_path / "champion.pt"))
 
     trainer = MeshAETrainer(
         model,
