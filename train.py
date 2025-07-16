@@ -54,13 +54,17 @@ def parse_cli_args() -> argparse.Namespace:
         required=False,
         help="Checkpointing frequency in number of iterations.",
     )
+    parser.add_argument(
+        "--eval-freq",
+        
+    )
     args = parser.parse_args()
     return args
 
 
 def init_data_args(
     config: dict[Literal["dataset", "collate_fn"], Any],
-) -> tuple[MeshAEDataset, MeshAEDataset | Subset]:
+) -> dict[str, MeshAEDataset | Subset]:
     r"""Initialize data arguments for the training loop.
 
     Data arguments (returned as dictionary) include:
@@ -96,7 +100,7 @@ def init_data_args(
         ret["eval_dataset"] = MeshAEDataset(**config["dataset"]["eval"])
         return ret
 
-    indices = torch.randperm(len(ret["train_dataset"]))[:8192]
+    indices = torch.randperm(len(ret["train_dataset"]))[:8192].tolist()
     ret["eval_dataset"] = Subset(ret["train_dataset"], indices)
     return ret
 

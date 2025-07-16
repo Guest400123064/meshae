@@ -178,3 +178,7 @@ data/**/*.glb
 
 # Cached packages
 dependencies/
+
+# Wandb
+wandb/*
+!wandb/.gitkeep

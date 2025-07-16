@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -14,6 +14,53 @@ if TYPE_CHECKING:
     from torchtyping import TensorType
 
     from meshae.typing import b, n_edge, n_face, n_vrtx
+
+
+def tensor_describe(tensor: torch.Tensor) -> dict[str, Any]:
+    r"""Compute summary statistics for the input tensor.
+
+    This function mimics the behavior of ``pd.DataFrame.describe`` for a tensor,
+    which could be useful for debugging the training process. The following statistics
+    are computed:
+
+    - mean
+    - standard deviation
+    - minimum
+    - maximum
+    - 25th percentile
+    - 50th percentile (median)
+    - 75th percentile
+    - L2 norm
+    - total number of elements
+    - number of non-zero elements
+    - number of non-zero elements in percentage
+
+    The tensor will be viewed as a vector of shape ``(n_elements,)``. Thus, for instance,
+    the L2 norm for a two dimensional tensor will be the Frobenius norm.
+
+    Parameters
+    ----------
+    tensor : torch.Tensor
+        The tensor to compute summary statistics for.
+
+    Returns
+    -------
+    stats : dict[str, Any]
+        Summary statistics for the input tensor.
+    """
+    return {
+        "avg": tensor.mean().item(),
+        "std": tensor.std().item(),
+        "min": tensor.min().item(),
+        "max": tensor.max().item(),
+        "p25": tensor.quantile(0.25).item(),
+        "p50": tensor.quantile(0.5).item(),
+        "p75": tensor.quantile(0.75).item(),
+        "norm": tensor.norm().item(),
+        "numel": tensor.numel(),
+        "numel_nonzero": tensor.nonzero().size(0),
+        "numel_nonzero_pct": tensor.nonzero().size(0) / tensor.numel() * 100,
+    }
 
 
 def quantize(
@@ -29,8 +76,8 @@ def quantize(
         msg = f"High must be strictly greater than low, got: <{high_low}>."
         raise ValueError(msg)
 
-    tensor = ((tensor - low) / (high - low)) * num_bins - 0.5
-    return tensor.round().long().clamp(min=0, max=(num_bins - 1))
+    tensor = ((tensor - low) / (high - low)) * num_bins - 0.5  # type: ignore[assignment]
+    return tensor.round().long().clamp(min=0, max=(num_bins - 1))  # type: ignore[return-value]
 
 
 def dequantize(
@@ -46,8 +93,8 @@ def dequantize(
         msg = f"High must be strictly greater than low, got: <{high_low}>."
         raise ValueError(msg)
 
-    tensor = (tensor.float() + 0.5) / num_bins
-    return tensor * (high - low) + low
+    tensor = (tensor.float() + 0.5) / num_bins  # type: ignore[assignment]
+    return tensor * (high - low) + low  # type: ignore[return-value]
 
 
 def gaussian_blur1d(
@@ -71,13 +118,13 @@ def gaussian_blur1d(
     gaussian = F.normalize(gaussian, 1, dim=-1)
     channels = tensor.size(-1)
 
-    tensor = F.conv1d(
+    tensor = F.conv1d(  # type: ignore[assignment]
         rearrange(tensor, "... n c -> ... c n"),
         repeat(gaussian, "n -> c 1 n", c=channels),
         padding=half_width,
         groups=channels,
     )
-    return rearrange(tensor, "... c n -> ... n c")
+    return rearrange(tensor, "... c n -> ... n c")  # type: ignore[return-value]
 
 
 def create_mesh_from_face_vertices(
@@ -136,7 +183,7 @@ def compute_face_edges(
     vrtx_shared = vrtx_shared.any(-1).sum(-1)
     is_neighbor = vrtx_shared == 2
 
-    return all_edges[is_neighbor]
+    return all_edges[is_neighbor]  # type: ignore[return-value]
 
 
 def sort_faces(
@@ -179,7 +226,7 @@ def sort_faces(
         keys = tuple(keys[ax] for ax in reversed(by))
 
         indices = np.lexsort(keys)[..., 0]
-        argsort = np.empty(mesh.faces.shape, dtype=mesh.faces.dtype)
+        argsort = np.empty(mesh.faces.shape, dtype=np.int64)
         for i in range(3):
             argsort[indices == i] = [j % 3 for j in range(i, i + 3)]
 
@@ -196,7 +243,7 @@ def sort_faces(
 
     sorted_faces = _xx_face_sort(_in_face_sort())
     if return_tensor:
-        return torch.from_numpy(sorted_faces)
+        return torch.from_numpy(sorted_faces)  # type: ignore[return-value]
 
     return sorted_faces
 
@@ -241,7 +288,7 @@ def normalize_mesh(
     bbmin, bbmax = mesh.bounds
 
     center = -0.5 * (bbmax + bbmin)
-    scale = scale / np.linalg.norm(bbmax - bbmin)
+    scale = scale / np.linalg.norm(bbmax - bbmin).item()
 
     mesh.apply_translation(center)
     mesh.apply_scale(scale)

@@ -3,13 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import numpy as np
 import torch
+import wandb
 from pytorch_accelerated import Trainer
-from pytorch_accelerated.callbacks import LogMetricsCallback, TrainerCallback
+from pytorch_accelerated.callbacks import TrainerCallback
+
+from meshae.utils import tensor_describe
 
 if TYPE_CHECKING:
     from torchtyping import TensorType
+    from wandb.sdk.wandb_run import Run
 
     from meshae.typing import MeshAEDatumKeyType
 
@@ -51,6 +54,9 @@ class MeshAETrainer(Trainer):
         if self.scheduler is None:
             self.callback_handler.call_event("save_checkpoint_on_invoke", self)
 
+        g = self.model.decoder.refiner.layers[0][1].to_q.weight.grad.detach().norm(p=2)
+        print(g)
+
     def scheduler_step(self):
         r"""Include a checkpointing step."""
 
@@ -79,9 +85,10 @@ class MeshAETrainer(Trainer):
         batch_size : int
             Batch size.
         """
-        loss, *_ = self.model(**batch)
+        loss, (recon_loss, commit_loss), *_ = self.model(**batch)
         batch_size = batch["faces"].size(0)
 
+        print(f"Recon loss: {recon_loss:.2f}; commit loss: {commit_loss:.2f}")
         return {"loss": loss, "batch_size": batch_size}
 
     def calculate_eval_batch_loss(
@@ -180,5 +187,35 @@ class MeshAECheckpointCallback(TrainerCallback):
             )
 
 
-class MeshAELoggerCallback(LogMetricsCallback):
-    r""""""
+class MeshAELoggerCallback(TrainerCallback):
+    r"""This callback is used to log the metrics and key debug data to wandb.
+
+    The ``pytorch-accelerated`` package default logging behavior is to log the metrics
+    by the end of each epoch. This callback is used to log the metrics and key debug data,
+    such as the gradient norm, at a specific frequency. All information is logged to wandb.
+
+    Parameters
+    ----------
+    wandb_kwargs : dict[str, Any]
+        Keyword arguments to pass to the ``wandb.init`` function.
+    debug_parameters : list[str] | None, default=None
+        The parameters to watch for key statistics as well as those of gradients'.
+    debug_frequency : int, default=1000
+        The frequency of parameter debugging frequencies in number of iterations.
+        Note that the number of iterations is measured by the number of optimizer steps.
+    """
+
+    def __init__(
+        self,
+        wandb_kwargs: dict[str, Any],
+        debug_parameters: list[str] | None = None,
+        debug_frequency: int = 1000,
+    ) -> None:
+        self.wandb_kwargs = wandb_kwargs
+        self.run = wandb.init(**self.wandb_kwargs)
+
+        self.debug_parameters = debug_parameters or []
+        self.debug_frequency = debug_frequency
+
+    def on_training_run_end(self, trainer, **kwargs) -> None:
+        self.run.finish()
