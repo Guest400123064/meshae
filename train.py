@@ -16,55 +16,6 @@ from meshae.dataset import MeshAECollateFn, MeshAEDataset
 from meshae.trainer import MeshAECheckpointCallback, MeshAETrainer
 
 
-def parse_cli_args() -> argparse.Namespace:
-    r"""Build CLI interface for the training script.
-
-    Most model specification and training run settings should be configured through
-    the ``model.json`` and ``train.yml`` files. CLI accepts addition settings related
-    to model checkpointing, logging, and debugging.
-    """
-    parser = argparse.ArgumentParser(
-        prog="train.py",
-        description="Training script for the mesh autoencoder.",
-        epilog="Please raise an Issue in the GitHub repo for any question.",
-        allow_abbrev=True,
-    )
-    parser.add_argument(
-        "--model-config", "-m",
-        type=str,
-        required=True,
-        help="Path to the model specifications, e.g., the hidden size.",
-    )
-    parser.add_argument(
-        "--train-config", "-t",
-        type=str,
-        required=True,
-        help="Path to the training specifications, e.g., the number of epochs.",
-    )
-    parser.add_argument(
-        "--checkpoint-path",
-        type=str,
-        required=True,
-        help="Path to the directory storing model checkpoints.",
-    )
-    parser.add_argument(
-        "--checkpoint-frequency",
-        type=int,
-        default=-1,
-        required=False,
-        help="Checkpointing frequency in number of iterations.",
-    )
-    parser.add_argument(
-        "--eval-frequency",
-        type=int,
-        default=100,
-        required=False,
-        help="Evaluation frequency in number of iterations.",
-    )
-    args = parser.parse_args()
-    return args
-
-
 def init_data_args(
     config: dict[Literal["dataset", "collate_fn"], Any],
 ) -> dict[str, MeshAEDataset | Subset]:
@@ -126,6 +77,63 @@ def init_random_model(model_config: str | Path) -> MeshAEModel:
     return model
 
 
+def parse_cli_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="train.py",
+        description="Training script for the mesh autoencoder.",
+        epilog="Please raise an Issue in the GitHub repo for any question.",
+        allow_abbrev=True,
+    )
+    parser.add_argument(
+        "--model-config", "-m",
+        type=str,
+        required=True,
+        help="Path to the model specifications, e.g., the hidden size.",
+    )
+    parser.add_argument(
+        "--train-config", "-t",
+        type=str,
+        required=True,
+        help="Path to the training specifications, e.g., the number of epochs.",
+    )
+    parser.add_argument(
+        "--checkpoint-path",
+        type=str,
+        required=True,
+        help="Path to the directory storing model checkpoints.",
+    )
+    parser.add_argument(
+        "--checkpoint-frequency",
+        type=int,
+        default=-1,
+        required=False,
+        help="Checkpointing frequency in number of iterations.",
+    )
+    parser.add_argument(
+        "--wandb-project",
+        type=str,
+        default="meshae",
+        required=False,
+        help="Wandb project name.",
+    )
+    parser.add_argument(
+        "--wandb-name",
+        type=str,
+        default=None,
+        required=False,
+        help="Wandb run name.",
+    )
+    parser.add_argument(
+        "--eval-frequency",
+        type=int,
+        default=100,
+        required=False,
+        help="Evaluation frequency in number of iterations.",
+    )
+    args = parser.parse_args()
+    return args
+
+
 def main():
     args = parse_cli_args()
     with open(args.train_config) as fin:
@@ -151,7 +159,7 @@ def main():
     )
     trainer.train(
         create_scheduler_fn=scheduler,
-        train_dataloader_kwargs={"pin_memory": True, "num_workers": 8},
+        train_dataloader_kwargs={"pin_memory": True, "num_workers": 16},
         **init_data_args(train_config),
         **train_config["train"],
     )
