@@ -52,17 +52,20 @@ class MeshAETrainer(Trainer):
 
         self._current_step += 1
         if self.scheduler is None:
-            self.callback_handler.call_event("save_checkpoint_on_invoke", self)
+            self.callback_handler.call_event("on_invoke_save_checkpoint", self)
 
-        g = self.model.decoder.refiner.layers[0][1].to_q.weight.grad.detach().norm(p=2)
-        print(g)
+        # For simplicity, here we only let the process 0 to log the debug parameters
+        # because it is safe to assume that the situation will be similar across
+        # all processes.
+        if self._accelerator.process_index == 0:
+            self.callback_handler.call_event("on_invoke_debug_parameters", self)
 
     def scheduler_step(self):
         r"""Include a checkpointing step."""
 
         super().scheduler_step()
 
-        self.callback_handler.call_event("save_checkpoint_on_invoke", self)
+        self.callback_handler.call_event("on_invoke_save_checkpoint", self)
 
     def calculate_train_batch_loss(
         self,
@@ -85,11 +88,19 @@ class MeshAETrainer(Trainer):
         batch_size : int
             Batch size.
         """
-        loss, (recon_loss, commit_loss), *_ = self.model(**batch)
-        batch_size = batch["faces"].size(0)
+        loss, *_ = self.model(**batch)
+        size = batch["faces"].size(0)
 
-        print(f"Recon loss: {recon_loss:.2f}; commit loss: {commit_loss:.2f}")
-        return {"loss": loss, "batch_size": batch_size}
+        # Similar to the debug parameters logging, here we only let the process 0 to
+        # log the loss. However, here we would like to gather loss values from all
+        # processes and average them.
+        size_log = self.gather(torch.tensor(size, device=self.device)).sum()  # type: ignore
+        loss_log = self.gather(loss.detach()).sum()  # type: ignore
+        loss_log = (loss_log / size_log).item()
+        if self._accelerator.process_index == 0:
+            self.callback_handler.call_event("on_invoke_log_train_losses", loss_log)
+
+        return {"loss": loss, "batch_size": size}
 
     def calculate_eval_batch_loss(
         self,
@@ -178,7 +189,7 @@ class MeshAECheckpointCallback(TrainerCallback):
 
         return str(self.save_path / fn)
 
-    def save_checkpoint_on_invoke(self, trainer: MeshAETrainer) -> None:
+    def on_invoke_save_checkpoint(self, trainer: MeshAETrainer) -> None:
         if (trainer.current_step + 1) % self.checkpoint_frequency == 0:
             trainer.save_checkpoint(
                 save_path=self.make_checkpoint_full_path(trainer),
@@ -211,11 +222,53 @@ class MeshAELoggerCallback(TrainerCallback):
         debug_parameters: list[str] | None = None,
         debug_frequency: int = 1000,
     ) -> None:
-        self.wandb_kwargs = wandb_kwargs
-        self.run = wandb.init(**self.wandb_kwargs)
-
+        self.run = wandb.init(**wandb_kwargs)
         self.debug_parameters = debug_parameters or []
         self.debug_frequency = debug_frequency
+
+    def on_invoke_log_train_losses(self, loss: float) -> None:
+        r"""Log the training losses gathered from all processes."""
+
+        self.run.log({"loss": loss})
+
+    def on_invoke_debug_parameters(self, trainer: MeshAETrainer) -> None:
+        r"""Log the key statistics of monitoring parameters and their gradients to ``wandb.Table``.
+
+        The statistics are logged to ``wandb.Table`` with the following columns:
+
+        - ``step``: the current step.
+        - ``name``: the name of the parameter.
+        - ``{STAT_NAME}``: the statistics of the parameter, such as ``avg``.
+
+        The statistics are computed using the ``tensor_describe`` function.
+
+        Parameters
+        ----------
+        trainer : MeshAETrainer
+            The trainer instance.
+        """
+        cs = trainer.current_step + 1
+        if cs % self.debug_frequency != 0 or cs == 1:
+            return
+
+        sp, sg = [], []
+        all_parameters = dict(trainer.model.named_parameters())
+        for name in self.debug_parameters:
+            parameter = all_parameters[name]
+            meta_data = {"step": cs, "name": name}
+            sp.append(tensor_describe(parameter.detach()) | meta_data)
+            sg.append(tensor_describe(parameter.grad.detach()) | meta_data)
+
+        if not sp:
+            return
+
+        tp = wandb.Table(columns=list(sp[0].keys()))
+        tg = wandb.Table(columns=list(sg[0].keys()))
+        for p, g in zip(sp, sg):
+            tp.add_data(*p.values())
+            tg.add_data(*g.values())
+
+        self.run.log({"debug/parameters": tp, "debug/gradients": tg})
 
     def on_training_run_end(self, trainer, **kwargs) -> None:
         self.run.finish()

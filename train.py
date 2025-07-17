@@ -13,7 +13,7 @@ from torch.utils.data import Subset
 
 from meshae import MeshAEModel, MeshAEModelConfig
 from meshae.dataset import MeshAECollateFn, MeshAEDataset
-from meshae.trainer import MeshAECheckpointCallback, MeshAETrainer
+from meshae.trainer import MeshAECheckpointCallback, MeshAETrainer, MeshAELoggerCallback
 
 
 def init_data_args(
@@ -105,7 +105,7 @@ def parse_cli_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint-frequency",
         type=int,
-        default=-1,
+        default=1000,
         required=False,
         help="Checkpointing frequency in number of iterations.",
     )
@@ -124,11 +124,18 @@ def parse_cli_args() -> argparse.Namespace:
         help="Wandb run name.",
     )
     parser.add_argument(
-        "--eval-frequency",
-        type=int,
-        default=100,
+        "--debug-parameters",
+        nargs="+",
+        default=None,
         required=False,
-        help="Evaluation frequency in number of iterations.",
+        help="Parameters to watch for key statistics as well as those of gradients.",
+    )
+    parser.add_argument(
+        "--debug-frequency",
+        type=int,
+        default=1000,
+        required=False,
+        help="Frequency of parameter debugging in number of iterations.",
     )
     args = parser.parse_args()
     return args
@@ -146,6 +153,11 @@ def main():
     checkpoint_path = Path(args.checkpoint_path)
     ckpt_callback_freq = MeshAECheckpointCallback(checkpoint_path, args.checkpoint_frequency)
     ckpt_callback_best = SaveBestModelCallback(str(checkpoint_path / "champion.pt"))
+    logger_callback = MeshAELoggerCallback(
+        wandb_kwargs={"project": args.wandb_project, "name": args.wandb_name},
+        debug_parameters=args.debug_parameters,
+        debug_frequency=args.debug_frequency,
+    )
 
     trainer = MeshAETrainer(
         model,
@@ -154,12 +166,13 @@ def main():
         callbacks=(
             ckpt_callback_freq,
             ckpt_callback_best,
+            logger_callback,
             *get_default_callbacks(),
         ),
     )
     trainer.train(
         create_scheduler_fn=scheduler,
-        train_dataloader_kwargs={"pin_memory": True, "num_workers": 16},
+        train_dataloader_kwargs={"pin_memory": True, "num_workers": 8},
         **init_data_args(train_config),
         **train_config["train"],
     )
