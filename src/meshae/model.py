@@ -293,8 +293,8 @@ class MeshAEEncoder(nn.Module):
             codebook_size=num_codebook_codes,
             codebook_dim=codebook_size,
             shared_codebook=True,
-            rotation_trick=True,
-            stochastic_sample_codes=True,
+            rotation_trick=False,
+            stochastic_sample_codes=False,
             sample_codebook_temp=sample_codebook_temp,
             commitment_weight=commitment_weight,
             ema_update=True,
@@ -604,6 +604,16 @@ class MeshAEModel(nn.Module):
         )
 
         self.bin_smooth_blur_sigma = bin_smooth_blur_sigma
+
+        self.apply(self.init_parameters)
+
+    def init_parameters(self, module: nn.Module):
+        if isinstance(module, nn.Linear):
+            nn.init.kaiming_normal_(module.weight, mode="fan_out", nonlinearity="relu")
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.kaiming_normal_(module.weight, mode="fan_out", nonlinearity="relu")
 
     def forward(
         self,

@@ -94,9 +94,9 @@ class MeshAETrainer(Trainer):
         # Similar to the debug parameters logging, here we only let the process 0 to
         # log the loss. However, here we would like to gather loss values from all
         # processes and average them.
-        size_log = self.gather(torch.tensor(size, device=self.device)).sum()  # type: ignore
-        loss_log = self.gather(loss.detach()).sum()  # type: ignore
-        loss_log = (loss_log / size_log).item()
+        size_log = self.gather(torch.tensor(size, device=self.device))  # type: ignore
+        loss_log = self.gather(loss.detach())  # type: ignore
+        loss_log = ((loss_log * size_log).sum() / size_log.sum()).item()
         if self._accelerator.process_index == 0:
             self.callback_handler.call_event("on_invoke_log_train_losses", loss_log)
 

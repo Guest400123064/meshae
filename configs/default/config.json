@@ -21,8 +21,8 @@
             "high_low": [1.0, 0.0]
         }
     },
-    "codebook_size": 256,
-    "hidden_size": 512,
+    "codebook_size": 128,
+    "hidden_size": 128,
     "num_sageconv_layers": 1,
     "num_encoder_layers": 2,
     "num_encoder_heads": 8,
