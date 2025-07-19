@@ -293,7 +293,7 @@ class MeshAEEncoder(nn.Module):
             codebook_size=num_codebook_codes,
             codebook_dim=codebook_size,
             shared_codebook=True,
-            rotation_trick=False,
+            rotation_trick=True,
             stochastic_sample_codes=False,
             sample_codebook_temp=sample_codebook_temp,
             commitment_weight=commitment_weight,
