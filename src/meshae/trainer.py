@@ -4,17 +4,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
-import wandb
 from pytorch_accelerated import Trainer
 from pytorch_accelerated.callbacks import TrainerCallback
 
+import wandb
 from meshae.utils import tensor_describe
 
 if TYPE_CHECKING:
     from torchtyping import TensorType
-    from wandb.sdk.wandb_run import Run
 
     from meshae.typing import MeshAEDatumKeyType
+    from wandb.sdk.wandb_run import Run
 
 
 class MeshAETrainer(Trainer):
